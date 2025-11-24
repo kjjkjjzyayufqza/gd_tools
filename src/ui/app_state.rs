@@ -48,6 +48,12 @@ pub struct AppState {
     // Search filter
     #[serde(skip)]
     pub search_query: String,
+
+    // File system watcher
+    #[serde(skip)]
+    pub file_watcher: Option<Box<dyn notify::Watcher>>,
+    #[serde(skip)]
+    pub file_events_receiver: Option<crossbeam_channel::Receiver<notify::Result<notify::Event>>>,
 }
 
 impl Default for AppState {
@@ -68,6 +74,8 @@ impl Default for AppState {
             extract_status_receiver: None,
             expanded_folders: std::collections::HashSet::new(),
             search_query: String::new(),
+            file_watcher: None,
+            file_events_receiver: None,
         }
     }
 }

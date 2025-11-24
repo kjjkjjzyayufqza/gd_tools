@@ -139,10 +139,9 @@ where
             let psarc_path = relative_path.clone();
 
             let name_lower = psarc_path.to_ascii_lowercase();
-            let is_filenames = name_lower == "filenames.txt";
-            let is_filelist = name_lower == "filelist.xml" || name_lower == "filelist.txt";
-            if is_filenames || is_filelist {
-                if is_filelist || manifest_bytes_on_disk.is_none() {
+            let is_filelist = name_lower == "filelist.xml";
+            if is_filelist {
+                if manifest_bytes_on_disk.is_none() {
                     manifest_bytes_on_disk = Some(std::fs::read(path)?);
                 }
                 continue;
@@ -152,7 +151,7 @@ where
         }
     }
 
-    let (files, filenames_bytes) = resolve_file_order(discovered_files, manifest_bytes_on_disk)?;
+    let (files, filelist_bytes) = resolve_file_order(discovered_files, manifest_bytes_on_disk)?;
 
     // Pre-calculate MD5 hashes for all files in parallel to avoid duplicate calculations
     let file_hashes: Vec<[u8; 16]> = files
@@ -162,10 +161,10 @@ where
 
     // Create temp file for compressed data
     let mut temp_data_file = tempfile::tempfile()?;
-    let total_files = files.len() + 1; // +1 for Filenames.txt
+    let total_files = files.len() + 1; // +1 for FileList.xml
 
     // Phase 2: Parallel Compression
-    // We treat Filenames.txt as file index 0
+    // We treat FileList.xml as file index 0
     // We won't use the separate writer thread complexity for now,
     // instead we'll do the "Sequential Files, Parallel Blocks" approach in the main thread.
 
@@ -176,13 +175,13 @@ where
     // Use larger buffer for better I/O performance (1MB instead of default 8KB)
     let mut writer = BufWriter::with_capacity(1024 * 1024, &mut temp_data_file);
 
-    // 1. Process Filenames.txt
+    // 1. Process FileList.xml
     {
-        let uncompressed_size = filenames_bytes.len() as u64;
+        let uncompressed_size = filelist_bytes.len() as u64;
         let zsize_start_index = zsizes.len() as u32;
 
         // Chunkify
-        let chunks: Vec<&[u8]> = filenames_bytes.chunks(BLOCK_SIZE).collect();
+        let chunks: Vec<&[u8]> = filelist_bytes.chunks(BLOCK_SIZE).collect();
 
         // Parallel Compress
         let compressed_chunks: Vec<Vec<u8>> = chunks
@@ -648,9 +647,9 @@ where
     // Create output directory
     std::fs::create_dir_all(output_dir)?;
 
-    // Step 1: Read and parse filenames.txt from the first entry (name_hash == [0; 16])
+    // Step 1: Read and parse FileList.xml from the first entry (name_hash == [0; 16])
     progress_callback(ExtractionStatus {
-        current_file: "Reading filenames.txt...".to_string(),
+        current_file: "Reading FileList.xml...".to_string(),
         progress: 0.0,
         is_extracting: true,
         error: None,
@@ -661,18 +660,18 @@ where
     if let Some(first_entry) = entries.first() {
         if first_entry.name_hash == [0; 16] && first_entry.offset != 0 {
             match read_file_data(&mmap, first_entry, &zsizes, block_size as usize) {
-                Ok(filenames_data) => {
-                    // Save filenames.txt as filenames.xml to output directory
-                    let filenames_xml_path = output_dir.join("filenames.xml");
-                    if let Err(e) = std::fs::write(&filenames_xml_path, &filenames_data) {
-                        eprintln!("[PSARC] Warning: Failed to save filenames.xml: {}", e);
+                Ok(filelist_data) => {
+                    // Save FileList.xml to output directory
+                    let filelist_xml_path = output_dir.join("FileList.xml");
+                    if let Err(e) = std::fs::write(&filelist_xml_path, &filelist_data) {
+                        eprintln!("[PSARC] Warning: Failed to save FileList.xml: {}", e);
                     } else {
-                        eprintln!("[PSARC] Saved filenames.xml to output directory");
+                        eprintln!("[PSARC] Saved FileList.xml to output directory");
                     }
 
-                    // Parse filenames.txt content
+                    // Parse FileList.xml content
                     // UnPSARC splits by both '\n' and '\0'
-                    let filenames_text = String::from_utf8_lossy(&filenames_data);
+                    let filenames_text = String::from_utf8_lossy(&filelist_data);
                     let lines: Vec<&str> = filenames_text
                         .split(|c| c == '\n' || c == '\0')
                         .filter(|line| !line.trim().is_empty())
@@ -705,10 +704,10 @@ where
                         filename_map.insert(hash_lower, original_filename);
                     }
 
-                    eprintln!("[PSARC] Loaded {} filenames from filenames.txt", filename_map.len());
+                    eprintln!("[PSARC] Loaded {} filenames from FileList.xml", filename_map.len());
                 }
                 Err(e) => {
-                    eprintln!("[PSARC] Warning: Failed to read filenames.txt: {}", e);
+                    eprintln!("[PSARC] Warning: Failed to read FileList.xml: {}", e);
                     eprintln!("[PSARC] Will use hash-based filenames instead");
                 }
             }
@@ -720,7 +719,7 @@ where
     let mut skipped_count = 0;
     
     for (idx, entry) in entries.iter().enumerate() {
-        // Skip entries with zero name_hash (filenames.txt manifest)
+        // Skip entries with zero name_hash (FileList.xml manifest)
         if entry.name_hash == [0; 16] {
             skipped_count += 1;
             continue;
@@ -752,7 +751,7 @@ where
                 entry.name_hash[12], entry.name_hash[13], entry.name_hash[14], entry.name_hash[15]);
             
             // Put unknown files in _Unknowns directory (like UnPSARC does)
-            eprintln!("[PSARC] Archive contains a hash which is not in filenames table: {}", hash_to_string(&entry.name_hash));
+            eprintln!("[PSARC] Archive contains a hash which is not in FileList.xml table: {}", hash_to_string(&entry.name_hash));
             format!("_Unknowns{}{}.bin", std::path::MAIN_SEPARATOR, hash_hex)
         };
         

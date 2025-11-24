@@ -2,10 +2,105 @@ use super::app_state::AppState;
 use egui::{TopBottomPanel, Ui};
 use rfd::FileDialog;
 use walkdir::WalkDir;
-// use std::path::Path; // Unused
+use std::path::Path;
+use notify::{Watcher, RecursiveMode, Config};
+
+/// Scans a directory and updates the loaded files list
+fn scan_directory(state: &mut AppState, path: &Path) {
+    state.loaded_files.clear();
+    for entry in WalkDir::new(path).into_iter().filter_map(|e| e.ok()) {
+        if entry.file_type().is_file() {
+            if let Ok(relative) = entry.path().strip_prefix(path) {
+                state.loaded_files.push(relative.to_path_buf());
+            }
+        }
+    }
+}
+
+/// Starts file system watching for the given directory
+fn start_file_watcher(state: &mut AppState, path: &Path) {
+    // Stop existing watcher if any
+    state.file_watcher = None;
+    state.file_events_receiver = None;
+
+    // Create channel for file system events
+    let (tx, rx) = crossbeam_channel::unbounded();
+
+    // Create watcher configuration
+    let config = Config::default()
+        .with_poll_interval(std::time::Duration::from_secs(1))
+        .with_compare_contents(false);
+
+    // Create watcher with configuration
+    match notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+        let _ = tx.send(event);
+    })
+    .and_then(|mut watcher| {
+        watcher.configure(config)?;
+        Ok(watcher)
+    }) {
+        Ok(mut watcher) => {
+            // Watch the directory recursively
+            if let Err(e) = watcher.watch(path, RecursiveMode::Recursive) {
+                state.status_message = format!("Failed to watch directory: {}", e);
+                return;
+            }
+
+            state.file_watcher = Some(Box::new(watcher));
+            state.file_events_receiver = Some(rx);
+            state.status_message = format!("Watching: {}", path.display());
+        }
+        Err(e) => {
+            state.status_message = format!("Failed to create file watcher: {}", e);
+        }
+    }
+}
+
+/// Processes file system events and updates the file list
+pub fn process_file_events(ctx: &egui::Context, state: &mut AppState) {
+    let mut needs_refresh = false;
+    let mut error_message = None;
+
+    // Collect events first to avoid borrowing issues
+    if let Some(rx) = &state.file_events_receiver {
+        while let Ok(event_result) = rx.try_recv() {
+            match event_result {
+                Ok(event) => {
+                    // Check if this is a relevant event (create, remove, rename)
+                    match event.kind {
+                        notify::EventKind::Create(_)
+                        | notify::EventKind::Remove(_)
+                        | notify::EventKind::Modify(notify::event::ModifyKind::Name(_)) => {
+                            needs_refresh = true;
+                        }
+                        _ => {}
+                    }
+                }
+                Err(e) => {
+                    error_message = Some(format!("File watcher error: {}", e));
+                }
+            }
+        }
+    }
+
+    // Update error message if any
+    if let Some(err) = error_message {
+        state.status_message = err;
+    }
+
+    // Refresh file list if needed
+    if needs_refresh {
+        if let Some(root) = state.current_root_dir.clone() {
+            scan_directory(state, &root);
+            ctx.request_repaint();
+        }
+    }
+}
 
 /// Renders the top navigation bar.
 pub fn show(ctx: &egui::Context, state: &mut AppState) {
+    // Process file system events first
+    process_file_events(ctx, state);
     // Process packing status updates
     let mut done_packing = false;
     if let Some(rx) = &state.pack_status_receiver {
@@ -82,14 +177,10 @@ fn render_left_menu(ui: &mut Ui, state: &mut AppState) {
                 state.status_message = format!("Opened folder: {}", path.display());
 
                 // Scan for files immediately
-                state.loaded_files.clear();
-                for entry in WalkDir::new(&path).into_iter().filter_map(|e| e.ok()) {
-                    if entry.file_type().is_file() {
-                        if let Ok(relative) = entry.path().strip_prefix(&path) {
-                            state.loaded_files.push(relative.to_path_buf());
-                        }
-                    }
-                }
+                scan_directory(state, &path);
+
+                // Start file system watching
+                start_file_watcher(state, &path);
             }
             ui.close();
         }
@@ -245,7 +336,35 @@ fn render_right_toolbar(ui: &mut Ui, state: &mut AppState) {
     if state.is_packing {
         ui.add(egui::ProgressBar::new(state.pack_progress).show_percentage());
         ui.label("Packing...");
-    } else if state.is_extracting {
+    } else {
+        // Pack PSARC button - placed before Status label (right side in RTL layout)
+        if ui.button("Pack PSARC").clicked() {
+            if let Some(root) = &state.current_root_dir {
+                if let Some(output) = FileDialog::new()
+                    .add_filter("PSARC Archive", &["psarc"])
+                    .save_file()
+                {
+                    // Start packing
+                    let (tx, rx) = crossbeam_channel::unbounded();
+                    state.pack_status_receiver = Some(rx);
+                    state.is_packing = true;
+
+                    let root_clone = root.clone();
+
+                    // Call the PSARC module
+                    let _ = crate::psarc::pack_directory(&root_clone, &output, move |status| {
+                        let _ = tx.send(status);
+                    });
+                } else {
+                    state.status_message = "No output file selected!".to_string();
+                }
+            } else {
+                state.status_message = "No folder opened!".to_string();
+            }
+        }
+    }
+    
+    if state.is_extracting {
         ui.add(egui::ProgressBar::new(state.extract_progress).show_percentage());
         ui.label("Extracting...");
     }
@@ -256,15 +375,8 @@ fn render_right_toolbar(ui: &mut Ui, state: &mut AppState) {
     if ui.button("Refresh").clicked() {
         state.status_message = "Refreshing file list...".to_owned();
         // Re-scan if folder is open
-        if let Some(path) = &state.current_root_dir {
-            state.loaded_files.clear();
-            for entry in WalkDir::new(&path).into_iter().filter_map(|e| e.ok()) {
-                if entry.file_type().is_file() {
-                    if let Ok(relative) = entry.path().strip_prefix(&path) {
-                        state.loaded_files.push(relative.to_path_buf());
-                    }
-                }
-            }
+        if let Some(path) = state.current_root_dir.clone() {
+            scan_directory(state, &path);
         }
     }
     if ui.button("Reset Camera").clicked() {

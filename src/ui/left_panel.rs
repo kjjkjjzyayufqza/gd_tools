@@ -69,9 +69,10 @@ fn build_file_tree(files: &[PathBuf]) -> TreeNode {
     };
 
     for file_path in files {
-        let components: Vec<&str> = file_path
+        // Use to_string_lossy to handle non-UTF-8 paths (including Chinese characters)
+        let components: Vec<String> = file_path
             .iter()
-            .filter_map(|c| c.to_str())
+            .map(|c| c.to_string_lossy().to_string())
             .collect();
 
         if !components.is_empty() {
@@ -83,14 +84,14 @@ fn build_file_tree(files: &[PathBuf]) -> TreeNode {
 }
 
 impl TreeNode {
-    fn insert_path(&mut self, components: &[&str], index: usize) {
+    fn insert_path(&mut self, components: &[String], index: usize) {
         if index >= components.len() {
             return;
         }
 
-        let component = components[index].to_string();
+        let component = components[index].clone();
         let is_file = index == components.len() - 1;
-        let path_parts: Vec<&str> = components[..=index].iter().copied().collect();
+        let path_parts: Vec<&str> = components[..=index].iter().map(|s| s.as_str()).collect();
         let full_path = path_parts.join("/");
 
         if !self.children.contains_key(&component) {
