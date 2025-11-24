@@ -1,5 +1,5 @@
-use egui::{SidePanel, TextEdit, ScrollArea, CollapsingHeader, Label, Sense};
 use super::app_state::AppState;
+use egui::{Label, ScrollArea, Sense, SidePanel, TextEdit};
 
 pub fn show(ctx: &egui::Context, state: &mut AppState) {
     if !state.left_panel_visible {
@@ -15,7 +15,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
             ui.vertical(|ui| {
                 render_filters(ui);
                 ui.separator();
-                render_file_tree(ui, state);
+                render_file_list(ui, state);
             });
         });
 }
@@ -28,51 +28,39 @@ fn render_filters(ui: &mut egui::Ui) {
             .selected_text("All")
             .show_ui(ui, |ui| {
                 ui.selectable_value(&mut 0, 0, "All");
-                ui.selectable_value(&mut 1, 1, "Models");
-                ui.selectable_value(&mut 2, 2, "Textures");
             });
-    });
-
-    ui.horizontal(|ui| {
-        ui.label("Scope:");
-        ui.radio_value(&mut 0, 0, "Game");
-        ui.radio_value(&mut 1, 1, "Mod");
-        ui.radio_value(&mut 2, 2, "Combined");
     });
 }
 
-fn render_file_tree(ui: &mut egui::Ui, state: &mut AppState) {
+fn render_file_list(ui: &mut egui::Ui, state: &mut AppState) {
     ScrollArea::vertical().show(ui, |ui| {
-        CollapsingHeader::new("assets (Game)").default_open(true).show(ui, |ui| {
-            CollapsingHeader::new("models").show(ui, |ui| {
-                 file_item(ui, state, "player.obj", "Game");
-                 file_item(ui, state, "enemy.fbx", "Game");
-            });
-            CollapsingHeader::new("textures").show(ui, |ui| {
-                file_item(ui, state, "wood.png", "Game");
-                file_item(ui, state, "metal.png", "Game");
-            });
-        });
+        if state.loaded_files.is_empty() {
+            ui.label("No files loaded. Open a folder to start.");
+        } else {
+            if let Some(root) = &state.current_root_dir {
+                ui.label(format!(
+                    "📂 {}",
+                    root.file_name().unwrap_or_default().to_string_lossy()
+                ));
+            }
 
-        CollapsingHeader::new("mod_assets (My Mod)").default_open(true).show(ui, |ui| {
-             CollapsingHeader::new("models").show(ui, |ui| {
-                 file_item(ui, state, "custom_sword.obj", "Mod");
-            });
-        });
+            // Use virtual scrolling for large lists if possible, but egui's simple list is okay for now
+            // For thousands of files, we might want to optimize this further.
+            for path in &state.loaded_files {
+                let name = path.to_string_lossy();
+                let _is_selected = state.selected_file.as_deref() == Some(name.as_ref());
+
+                if ui
+                    .add(
+                        Label::new(format!("📄 {}", name))
+                            .sense(Sense::click())
+                            .selectable(false),
+                    ) // We handle selection manually
+                    .clicked()
+                {
+                    state.selected_file = Some(name.into_owned());
+                }
+            }
+        }
     });
 }
-
-fn file_item(ui: &mut egui::Ui, state: &mut AppState, name: &str, source: &str) {
-    let _is_selected = state.selected_file.as_deref() == Some(name);
-    let label_text = format!("📄 {} ({})", name, source);
-    
-    if ui.add(Label::new(label_text).sense(Sense::click()).selectable(false)).clicked() {
-        state.selected_file = Some(name.to_owned());
-    }
-    
-    // Use selectable_label for better selection visualization if preferred
-    // if ui.selectable_label(is_selected, label_text).clicked() {
-    //      state.selected_file = Some(name.to_owned());
-    // }
-}
-

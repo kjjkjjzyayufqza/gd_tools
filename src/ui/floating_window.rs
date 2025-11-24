@@ -1,5 +1,5 @@
-use egui::{Window, ScrollArea};
 use super::app_state::AppState;
+use egui::{ScrollArea, Window};
 
 pub fn show(ctx: &egui::Context, state: &mut AppState) {
     Window::new("Floating Window")
@@ -10,27 +10,29 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
         .default_height(300.0)
         .show(ctx, |ui| {
             ui.label("This is a floating utility window.");
-            
+
             ui.separator();
-            
+
             // Example content: Build Output
             ui.collapsing("Build Output", |ui| {
                 ScrollArea::vertical().max_height(150.0).show(ui, |ui| {
-                     ui.label("[INFO] Build started...");
-                     ui.label("[INFO] Parsing assets...");
-                     ui.colored_label(egui::Color32::YELLOW, "[WARN] Texture 'wood.png' missing mipmaps.");
-                     ui.colored_label(egui::Color32::GREEN, "[SUCCESS] Build completed.");
+                    ui.label("[INFO] Build started...");
+                    ui.label("[INFO] Parsing assets...");
+                    ui.colored_label(
+                        egui::Color32::YELLOW,
+                        "[WARN] Texture 'wood.png' missing mipmaps.",
+                    );
+                    ui.colored_label(egui::Color32::GREEN, "[SUCCESS] Build completed.");
                 });
             });
 
-             ui.separator();
+            ui.separator();
 
-             // Example content: Batch Tools
-             ui.collapsing("Batch Tools", |ui| {
-                 if ui.button("Batch Rename").clicked() {
-                     // ...
-                 }
-             });
+            // Example content: Batch Tools
+            ui.collapsing("Batch Tools", |ui| {
+                if ui.button("Batch Rename").clicked() {
+                    // ...
+                }
+            });
         });
 }
-

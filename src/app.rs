@@ -1,10 +1,5 @@
 use crate::ui::{
-    app_state::AppState,
-    center_panel,
-    floating_window,
-    left_panel,
-    right_panel,
-    top_panel,
+    app_state::AppState, center_panel, floating_window, left_panel, right_panel, top_panel,
 };
 
 /// We derive Deserialize/Serialize so we can persist app state on shutdown.

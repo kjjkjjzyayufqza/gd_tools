@@ -1,5 +1,5 @@
-use egui::{CentralPanel, Ui};
 use super::app_state::AppState;
+use egui::{CentralPanel, Ui};
 
 pub fn show(ctx: &egui::Context, state: &mut AppState) {
     CentralPanel::default().show(ctx, |ui| {
@@ -13,8 +13,9 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
 fn render_3d_viewport(ui: &mut Ui, rect: egui::Rect, _state: &mut AppState) {
     // This is where the 3D renderer would hook in.
     // For now, we just draw a placeholder.
-    ui.painter().rect_filled(rect, 0.0, egui::Color32::from_gray(30));
-    
+    ui.painter()
+        .rect_filled(rect, 0.0, egui::Color32::from_gray(30));
+
     ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
         ui.centered_and_justified(|ui| {
             ui.vertical_centered(|ui| {
@@ -30,7 +31,7 @@ fn render_hud(ui: &mut Ui, rect: egui::Rect, _state: &mut AppState) {
     // We use a fixed position relative to the central panel
     let hud_pos = rect.min + egui::vec2(10.0, 10.0);
     let hud_rect = egui::Rect::from_min_size(hud_pos, egui::vec2(rect.width() - 20.0, 40.0));
-    
+
     ui.scope_builder(egui::UiBuilder::new().max_rect(hud_rect), |ui| {
         ui.horizontal(|ui| {
             if ui.button("Play").clicked() {}
@@ -40,4 +41,3 @@ fn render_hud(ui: &mut Ui, rect: egui::Rect, _state: &mut AppState) {
         });
     });
 }
-
