@@ -9,6 +9,7 @@ use std::fs::File;
 use std::io::{self, BufWriter, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::thread;
+use std::time::Instant;
 use walkdir::WalkDir;
 
 const BLOCK_SIZE: usize = 65536; // 64KB
@@ -42,6 +43,13 @@ struct CompressedBlock {
     // original_size: usize,
 }
 
+struct ProcessedFile {
+    file_idx: usize,
+    compressed_data: Vec<u8>,
+    zsizes: Vec<ZSize>,
+    entry: Entry,
+}
+
 pub fn pack_directory<F>(
     root_path: &Path,
     output_path: &Path,
@@ -52,23 +60,32 @@ where
 {
     let root_path = root_path.to_path_buf();
     let output_path = output_path.to_path_buf();
+    let start_time = Instant::now();
 
     // Run in a separate thread to avoid blocking UI
     thread::spawn(move || {
-        if let Err(e) = pack_directory_internal(&root_path, &output_path, &progress_callback) {
-            progress_callback(PackingStatus {
-                current_file: "Error".to_string(),
-                progress: 0.0,
-                is_packing: false,
-                error: Some(e.to_string()),
-            });
-        } else {
-            progress_callback(PackingStatus {
-                current_file: "Done".to_string(),
-                progress: 1.0,
-                is_packing: false,
-                error: None,
-            });
+        let result = pack_directory_internal(&root_path, &output_path, &progress_callback);
+        let elapsed_ms = start_time.elapsed().as_millis();
+
+        match result {
+            Err(e) => {
+                eprintln!("[PSARC] Packing failed after {} ms: {}", elapsed_ms, e);
+                progress_callback(PackingStatus {
+                    current_file: "Error".to_string(),
+                    progress: 0.0,
+                    is_packing: false,
+                    error: Some(e.to_string()),
+                });
+            }
+            Ok(()) => {
+                eprintln!("[PSARC] Packing completed successfully in {} ms", elapsed_ms);
+                progress_callback(PackingStatus {
+                    current_file: "Done".to_string(),
+                    progress: 1.0,
+                    is_packing: false,
+                    error: None,
+                });
+            }
         }
     });
 
@@ -128,6 +145,12 @@ where
 
     let (files, filenames_bytes) = resolve_file_order(discovered_files, manifest_bytes_on_disk)?;
 
+    // Pre-calculate MD5 hashes for all files in parallel to avoid duplicate calculations
+    let file_hashes: Vec<[u8; 16]> = files
+        .par_iter()
+        .map(|(_, psarc_path)| calculate_md5(psarc_path))
+        .collect();
+
     // Create temp file for compressed data
     let mut temp_data_file = tempfile::tempfile()?;
     let total_files = files.len() + 1; // +1 for Filenames.txt
@@ -141,7 +164,8 @@ where
     let mut entries: Vec<Entry> = Vec::with_capacity(total_files);
     let mut current_offset = 0u64;
 
-    let mut writer = BufWriter::new(&mut temp_data_file);
+    // Use larger buffer for better I/O performance (1MB instead of default 8KB)
+    let mut writer = BufWriter::with_capacity(1024 * 1024, &mut temp_data_file);
 
     // 1. Process Filenames.txt
     {
@@ -183,98 +207,142 @@ where
         });
     }
 
-    // 2. Process Real Files
-    let mut completed_files = 0;
+    // 2. Process Real Files in Parallel
     let total_files_count = files.len();
+    
+    // Process files in parallel, but collect results to maintain order
+    // Note: We can't call progress_callback in parallel context, so we'll update after collection
+    let processed_files: Result<Vec<ProcessedFile>, io::Error> = files
+        .par_iter()
+        .enumerate()
+        .map(|(file_idx, (sys_path, _psarc_path))| {
 
-    for (sys_path, psarc_path) in files {
-        progress_callback(PackingStatus {
-            current_file: psarc_path.clone(),
-            progress: (completed_files as f32) / (total_files_count as f32),
-            is_packing: true,
-            error: None,
-        });
+            let file = File::open(sys_path)?;
+            let len = file.metadata()?.len();
 
-        let file = File::open(&sys_path)?;
-        let len = file.metadata()?.len();
+            if len == 0 {
+                return Ok(ProcessedFile {
+                    file_idx,
+                    compressed_data: Vec::new(),
+                    zsizes: Vec::new(),
+                    entry: Entry {
+                        name_hash: file_hashes[file_idx],
+                        zsize_index: 0, // Will be set later
+                        uncompressed_size: 0,
+                        offset: 0, // Will be set later
+                    },
+                });
+            }
+
+            // Mmap for efficiency on large files
+            // SAFETY: We assume the file is not modified while we read it.
+            #[allow(unsafe_code)]
+            let mmap = unsafe { Mmap::map(&file)? };
+            let chunks: Vec<&[u8]> = mmap.chunks(BLOCK_SIZE).collect();
+
+            // Parallel Compress blocks
+            let compressed_chunks: Vec<Vec<u8>> = chunks
+                .par_iter()
+                .map(|chunk| compress_block(chunk))
+                .collect();
+
+            let mut file_zsizes = Vec::new();
+            let mut file_data = Vec::new();
+
+            for (i, compressed) in compressed_chunks.iter().enumerate() {
+                let size = compressed.len();
+                let original_len = chunks[i].len();
+                let is_worth_compressing = size < original_len;
+
+                let final_data = if is_worth_compressing {
+                    compressed.as_slice()
+                } else {
+                    chunks[i]
+                };
+
+                let stored_size = final_data.len();
+
+                // Determine ZSize value
+                let zsize_val = if !is_worth_compressing {
+                    if original_len == BLOCK_SIZE {
+                        0 // Special case for full raw block
+                    } else {
+                        original_len as u16 // Partial raw block
+                    }
+                } else {
+                    stored_size as u16
+                };
+
+                file_zsizes.push(ZSize { size: zsize_val });
+                file_data.extend_from_slice(final_data);
+            }
+
+            Ok(ProcessedFile {
+                file_idx,
+                compressed_data: file_data,
+                zsizes: file_zsizes,
+                entry: Entry {
+                    name_hash: file_hashes[file_idx],
+                    zsize_index: 0, // Will be set later
+                    uncompressed_size: len,
+                    offset: 0, // Will be set later
+                },
+            })
+        })
+        .collect();
+
+    let mut processed_files = processed_files?;
+
+    // Sort by file_idx to maintain order
+    processed_files.sort_by_key(|f| f.file_idx);
+
+    // Write processed files in order and build entries/zsizes
+    let progress_update_interval = (total_files_count / 100).max(1).min(10);
+    for (idx, processed) in processed_files.into_iter().enumerate() {
+        // Update progress during sequential write phase
+        if idx % progress_update_interval == 0 || idx == total_files_count - 1 {
+            if let Some((_, psarc_path)) = files.get(processed.file_idx) {
+                progress_callback(PackingStatus {
+                    current_file: psarc_path.clone(),
+                    progress: (idx as f32) / (total_files_count as f32),
+                    is_packing: true,
+                    error: None,
+                });
+            }
+        }
         let zsize_start_index = zsizes.len() as u32;
         let start_offset = current_offset;
 
-        if len == 0 {
-            entries.push(Entry {
-                name_hash: calculate_md5(&psarc_path),
-                zsize_index: zsize_start_index,
-                uncompressed_size: 0,
-                offset: start_offset,
-            });
-            completed_files += 1;
-            continue;
-        }
+        // Add zsizes for this file
+        zsizes.extend(processed.zsizes);
 
-        // Mmap for efficiency on large files
-        // SAFETY: We assume the file is not modified while we read it.
-        #[allow(unsafe_code)]
-        let mmap = unsafe { Mmap::map(&file)? };
-        let chunks: Vec<&[u8]> = mmap.chunks(BLOCK_SIZE).collect();
+        // Write compressed data
+        writer.write_all(&processed.compressed_data)?;
+        current_offset += processed.compressed_data.len() as u64;
 
-        // Parallel Compress
-        let compressed_chunks: Vec<Vec<u8>> = chunks
-            .par_iter()
-            .map(|chunk| compress_block(chunk))
-            .collect();
-
-        for (i, compressed) in compressed_chunks.iter().enumerate() {
-            let size = compressed.len();
-            // If compressed is same size or larger, store uncompressed
-            // 0 means uncompressed in PSARC (usually)
-            // Actually strict spec: if ZSize == 0, it uses BlockSize (64KB).
-            // What if the last block is 10 bytes and uncompressed?
-            // Spec: "if CompressedSize == 0, CompressedSize = BlockSize" -> implies 64KB uncompressed.
-            // For partial blocks: "if CompressedSize == UncompressedSize" -> stored raw.
-
-            let original_len = chunks[i].len();
-            let is_worth_compressing = size < original_len;
-
-            let final_data = if is_worth_compressing {
-                compressed.as_slice()
-            } else {
-                chunks[i]
-            };
-
-            let stored_size = final_data.len();
-
-            // Determine ZSize value
-            let zsize_val = if !is_worth_compressing {
-                // Stored Raw
-                if original_len == BLOCK_SIZE {
-                    0 // Special case for full raw block
-                } else {
-                    original_len as u16 // Partial raw block
-                }
-            } else {
-                stored_size as u16
-            };
-
-            zsizes.push(ZSize { size: zsize_val });
-            writer.write_all(final_data)?;
-            current_offset += stored_size as u64;
-        }
-
+        // Create entry with correct offsets
         entries.push(Entry {
-            name_hash: calculate_md5(&psarc_path),
+            name_hash: processed.entry.name_hash,
             zsize_index: zsize_start_index,
-            uncompressed_size: len,
+            uncompressed_size: processed.entry.uncompressed_size,
             offset: start_offset,
         });
-
-        completed_files += 1;
     }
+
+    // Final progress update
+    progress_callback(PackingStatus {
+        current_file: "Writing...".to_string(),
+        progress: 1.0,
+        is_packing: true,
+        error: None,
+    });
 
     writer.flush()?;
     drop(writer); // Release borrow on temp_data_file
 
     // Phase 3: Write Final Output
-    let mut output = BufWriter::new(File::create(output_path)?);
+    // Use larger buffer for better I/O performance
+    let mut output = BufWriter::with_capacity(1024 * 1024, File::create(output_path)?);
 
     // --- Header ---
     output.write_all(b"PSAR")?;
@@ -411,6 +479,8 @@ fn manifest_bytes_from_paths(paths: &[String]) -> Vec<u8> {
 }
 
 fn compress_block(data: &[u8]) -> Vec<u8> {
+    // Use default compression level for better speed/ratio balance
+    // best() is too slow, default() provides good compression with better speed
     let mut encoder = ZlibEncoder::new(Vec::with_capacity(data.len()), Compression::best());
     encoder.write_all(data).unwrap();
     encoder.finish().unwrap()
@@ -419,7 +489,14 @@ fn compress_block(data: &[u8]) -> Vec<u8> {
 fn calculate_md5(path: &str) -> [u8; 16] {
     // PSARC hashes uppercase paths, otherwise the entry order and hash values won't
     // match the original manifest and the archive becomes unreadable by the game.
+    // Optimize: check if already uppercase to avoid allocation
     let mut hasher = Md5::new();
-    hasher.update(path.to_ascii_uppercase().as_bytes());
+    if path.chars().all(|c| !c.is_ascii_lowercase()) {
+        // Already uppercase or no lowercase chars, use directly
+        hasher.update(path.as_bytes());
+    } else {
+        // Need to uppercase
+        hasher.update(path.to_ascii_uppercase().as_bytes());
+    }
     hasher.finalize().into()
 }

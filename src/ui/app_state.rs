@@ -32,6 +32,14 @@ pub struct AppState {
     // Thread-safe communication for packing status updates
     #[serde(skip)]
     pub pack_status_receiver: Option<crossbeam_channel::Receiver<crate::psarc::PackingStatus>>,
+
+    // Tree view expanded state
+    #[serde(skip)]
+    pub expanded_folders: std::collections::HashSet<String>,
+
+    // Search filter
+    #[serde(skip)]
+    pub search_query: String,
 }
 
 impl Default for AppState {
@@ -47,6 +55,8 @@ impl Default for AppState {
             is_packing: false,
             pack_progress: 0.0,
             pack_status_receiver: None,
+            expanded_folders: std::collections::HashSet::new(),
+            search_query: String::new(),
         }
     }
 }
