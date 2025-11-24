@@ -33,6 +33,14 @@ pub struct AppState {
     #[serde(skip)]
     pub pack_status_receiver: Option<crossbeam_channel::Receiver<crate::psarc::PackingStatus>>,
 
+    // PSARC Extraction State
+    #[serde(skip)]
+    pub is_extracting: bool,
+    #[serde(skip)]
+    pub extract_progress: f32,
+    #[serde(skip)]
+    pub extract_status_receiver: Option<crossbeam_channel::Receiver<crate::psarc::ExtractionStatus>>,
+
     // Tree view expanded state
     #[serde(skip)]
     pub expanded_folders: std::collections::HashSet<String>,
@@ -55,6 +63,9 @@ impl Default for AppState {
             is_packing: false,
             pack_progress: 0.0,
             pack_status_receiver: None,
+            is_extracting: false,
+            extract_progress: 0.0,
+            extract_status_receiver: None,
             expanded_folders: std::collections::HashSet::new(),
             search_query: String::new(),
         }

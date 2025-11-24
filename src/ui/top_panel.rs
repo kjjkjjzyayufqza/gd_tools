@@ -35,6 +35,35 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
         state.pack_status_receiver = None;
     }
 
+    // Process extraction status updates
+    let mut done_extracting = false;
+    if let Some(rx) = &state.extract_status_receiver {
+        while let Ok(status) = rx.try_recv() {
+            state.is_extracting = status.is_extracting;
+            state.extract_progress = status.progress;
+            state.status_message = if let Some(err) = status.error {
+                format!("Extraction Error: {}", err)
+            } else {
+                format!(
+                    "Extracted: {} ({:.0}%)",
+                    status.current_file,
+                    status.progress * 100.0
+                )
+            };
+
+            if !state.is_extracting {
+                done_extracting = true;
+            }
+
+            // Force repaint to show progress
+            ctx.request_repaint();
+        }
+    }
+
+    if done_extracting {
+        state.extract_status_receiver = None;
+    }
+
     TopBottomPanel::top("top_nav").show(ctx, |ui| {
         egui::MenuBar::new().ui(ui, |ui| {
             render_left_menu(ui, state);
@@ -75,6 +104,58 @@ fn render_left_menu(ui: &mut Ui, state: &mut AppState) {
         }
         if ui.button("New Mod Project...").clicked() {
             state.status_message = "Creating New Mod Project...".to_owned();
+            ui.close();
+        }
+        ui.separator();
+        if ui.button("Pack Folder...").clicked() {
+            if let Some(root) = &state.current_root_dir {
+                if let Some(output) = FileDialog::new()
+                    .add_filter("PSARC Archive", &["psarc"])
+                    .save_file()
+                {
+                    // Start packing
+                    let (tx, rx) = crossbeam_channel::unbounded();
+                    state.pack_status_receiver = Some(rx);
+                    state.is_packing = true;
+
+                    let root_clone = root.clone();
+
+                    // Call the PSARC module
+                    let _ = crate::psarc::pack_directory(&root_clone, &output, move |status| {
+                        let _ = tx.send(status);
+                    });
+                } else {
+                    state.status_message = "No output file selected!".to_string();
+                }
+            } else {
+                state.status_message = "No folder opened!".to_string();
+            }
+            ui.close();
+        }
+        if ui.button("Extract PSARC...").clicked() {
+            if let Some(psarc_file) = FileDialog::new()
+                .add_filter("PSARC Archive", &["psarc"])
+                .pick_file()
+            {
+                if let Some(output_dir) = FileDialog::new().pick_folder() {
+                    // Start extraction
+                    let (tx, rx) = crossbeam_channel::unbounded();
+                    state.extract_status_receiver = Some(rx);
+                    state.is_extracting = true;
+
+                    let psarc_clone = psarc_file.clone();
+                    let output_clone = output_dir.clone();
+
+                    // Call the PSARC extraction module
+                    let _ = crate::psarc::extract_psarc(&psarc_clone, &output_clone, move |status| {
+                        let _ = tx.send(status);
+                    });
+                } else {
+                    state.status_message = "No output directory selected!".to_string();
+                }
+            } else {
+                state.status_message = "No PSARC file selected!".to_string();
+            }
             ui.close();
         }
         ui.separator();
@@ -164,30 +245,9 @@ fn render_right_toolbar(ui: &mut Ui, state: &mut AppState) {
     if state.is_packing {
         ui.add(egui::ProgressBar::new(state.pack_progress).show_percentage());
         ui.label("Packing...");
-    } else {
-        if ui.button("Pack Folder").clicked() {
-            if let Some(root) = &state.current_root_dir {
-                if let Some(output) = FileDialog::new()
-                    .add_filter("PSARC Archive", &["psarc"])
-                    .save_file()
-                {
-                    // Start packing
-                    let (tx, rx) = crossbeam_channel::unbounded();
-                    state.pack_status_receiver = Some(rx);
-                    state.is_packing = true;
-
-                    let root_clone = root.clone();
-
-                    // Call the PSARC module
-                    // Note: We need to handle the error in the callback or return it via channel
-                    let _ = crate::psarc::pack_directory(&root_clone, &output, move |status| {
-                        let _ = tx.send(status);
-                    });
-                }
-            } else {
-                state.status_message = "No folder opened!".to_string();
-            }
-        }
+    } else if state.is_extracting {
+        ui.add(egui::ProgressBar::new(state.extract_progress).show_percentage());
+        ui.label("Extracting...");
     }
 
     ui.separator();

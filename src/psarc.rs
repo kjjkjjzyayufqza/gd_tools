@@ -1,4 +1,5 @@
-use byteorder::{BigEndian, WriteBytesExt};
+use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
+use flate2::read::ZlibDecoder;
 use flate2::Compression;
 use flate2::write::ZlibEncoder;
 use md5::{Digest, Md5};
@@ -6,7 +7,7 @@ use memmap2::Mmap;
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{self, BufWriter, Seek, SeekFrom, Write};
+use std::io::{self, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::Instant;
@@ -14,11 +15,19 @@ use walkdir::WalkDir;
 
 const BLOCK_SIZE: usize = 65536; // 64KB
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PackingStatus {
     pub current_file: String,
     pub progress: f32,
     pub is_packing: bool,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ExtractionStatus {
+    pub current_file: String,
+    pub progress: f32,
+    pub is_extracting: bool,
     pub error: Option<String>,
 }
 
@@ -448,9 +457,12 @@ fn resolve_file_order(
     });
 
     let mut manifest_content = String::new();
-    for (_, psarc_path) in &files {
+    for (i, (_, psarc_path)) in files.iter().enumerate() {
         manifest_content.push_str(psarc_path);
-        manifest_content.push('\n');
+        // Don't add newline after the last file (PSARC format doesn't have trailing newline)
+        if i < files.len() - 1 {
+            manifest_content.push('\n');
+        }
     }
 
     Ok((files, manifest_content.into_bytes()))
@@ -471,9 +483,12 @@ fn normalize_manifest_lines(text: &str) -> Vec<String> {
 
 fn manifest_bytes_from_paths(paths: &[String]) -> Vec<u8> {
     let mut bytes = Vec::new();
-    for path in paths {
+    for (i, path) in paths.iter().enumerate() {
         bytes.extend_from_slice(path.as_bytes());
-        bytes.push(b'\n');
+        // Don't add newline after the last file (PSARC format doesn't have trailing newline)
+        if i < paths.len() - 1 {
+            bytes.push(b'\n');
+        }
     }
     bytes
 }
@@ -499,4 +514,405 @@ fn calculate_md5(path: &str) -> [u8; 16] {
         hasher.update(path.to_ascii_uppercase().as_bytes());
     }
     hasher.finalize().into()
+}
+
+fn hash_to_string(hash: &[u8; 16]) -> String {
+    // Format hash as "AA-BB-CC-DD-..." (BitConverter.ToString format used by UnPSARC)
+    hash.iter()
+        .map(|b| format!("{:02X}", b))
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
+pub fn extract_psarc<F>(
+    psarc_path: &Path,
+    output_dir: &Path,
+    progress_callback: F,
+) -> io::Result<()>
+where
+    F: Fn(ExtractionStatus) + Send + Sync + 'static,
+{
+    let psarc_path = psarc_path.to_path_buf();
+    let output_dir = output_dir.to_path_buf();
+    let start_time = Instant::now();
+
+    thread::spawn(move || {
+        let result = extract_psarc_internal(&psarc_path, &output_dir, &progress_callback);
+        let elapsed_ms = start_time.elapsed().as_millis();
+
+        match result {
+            Err(e) => {
+                eprintln!("[PSARC] Extraction failed after {} ms: {}", elapsed_ms, e);
+                progress_callback(ExtractionStatus {
+                    current_file: "Error".to_string(),
+                    progress: 0.0,
+                    is_extracting: false,
+                    error: Some(e.to_string()),
+                });
+            }
+            Ok(()) => {
+                eprintln!("[PSARC] Extraction completed successfully in {} ms", elapsed_ms);
+                progress_callback(ExtractionStatus {
+                    current_file: "Done".to_string(),
+                    progress: 1.0,
+                    is_extracting: false,
+                    error: None,
+                });
+            }
+        }
+    });
+
+    Ok(())
+}
+
+fn extract_psarc_internal<F>(
+    psarc_path: &Path,
+    output_dir: &Path,
+    progress_callback: &F,
+) -> io::Result<()>
+where
+    F: Fn(ExtractionStatus),
+{
+    progress_callback(ExtractionStatus {
+        current_file: "Reading PSARC file...".to_string(),
+        progress: 0.0,
+        is_extracting: true,
+        error: None,
+    });
+
+    let file = File::open(psarc_path)?;
+    #[allow(unsafe_code)]
+    let mmap = unsafe { Mmap::map(&file)? };
+    let mut reader = io::Cursor::new(&mmap[..]);
+
+    // Read header
+    let mut magic = [0u8; 4];
+    reader.read_exact(&mut magic)?;
+    if &magic != b"PSAR" {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Invalid PSARC magic number",
+        ));
+    }
+
+    let _major = reader.read_u16::<BigEndian>()?;
+    let _minor = reader.read_u16::<BigEndian>()?;
+    let mut compression = [0u8; 4];
+    reader.read_exact(&mut compression)?;
+    if &compression != b"zlib" {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            format!("Unsupported compression: {:?}", compression),
+        ));
+    }
+
+    let toc_length = reader.read_u32::<BigEndian>()?;
+    let _entry_size = reader.read_u32::<BigEndian>()?;
+    let file_count = reader.read_u32::<BigEndian>()?;
+    let block_size = reader.read_u32::<BigEndian>()?;
+    let _flags = reader.read_u32::<BigEndian>()?;
+
+    // Read TOC entries
+    let mut entries: Vec<Entry> = Vec::with_capacity(file_count as usize);
+    for _ in 0..file_count {
+        let mut name_hash = [0u8; 16];
+        reader.read_exact(&mut name_hash)?;
+        let zsize_index = reader.read_u32::<BigEndian>()?;
+
+        let uncompressed_size_high = reader.read_u8()?;
+        let uncompressed_size_low = reader.read_u32::<BigEndian>()?;
+        let uncompressed_size = ((uncompressed_size_high as u64) << 32) | (uncompressed_size_low as u64);
+
+        let offset_high = reader.read_u8()?;
+        let offset_low = reader.read_u32::<BigEndian>()?;
+        let offset = ((offset_high as u64) << 32) | (offset_low as u64);
+
+        entries.push(Entry {
+            name_hash,
+            zsize_index,
+            uncompressed_size,
+            offset,
+        });
+    }
+
+    // Read ZSizes table
+    let zsizes_start = reader.position() as usize;
+    let zsizes_count = (toc_length as usize - 32 - (file_count as usize * 30)) / 2;
+    let zsizes: Vec<u16> = (0..zsizes_count)
+        .map(|i| {
+            let pos = zsizes_start + (i * 2);
+            u16::from_be_bytes([mmap[pos], mmap[pos + 1]])
+        })
+        .collect();
+
+    // Create output directory
+    std::fs::create_dir_all(output_dir)?;
+
+    // Step 1: Read and parse filenames.txt from the first entry (name_hash == [0; 16])
+    progress_callback(ExtractionStatus {
+        current_file: "Reading filenames.txt...".to_string(),
+        progress: 0.0,
+        is_extracting: true,
+        error: None,
+    });
+
+    let mut filename_map: HashMap<[u8; 16], String> = HashMap::new();
+    
+    if let Some(first_entry) = entries.first() {
+        if first_entry.name_hash == [0; 16] && first_entry.offset != 0 {
+            match read_file_data(&mmap, first_entry, &zsizes, block_size as usize) {
+                Ok(filenames_data) => {
+                    // Save filenames.txt as filenames.xml to output directory
+                    let filenames_xml_path = output_dir.join("filenames.xml");
+                    if let Err(e) = std::fs::write(&filenames_xml_path, &filenames_data) {
+                        eprintln!("[PSARC] Warning: Failed to save filenames.xml: {}", e);
+                    } else {
+                        eprintln!("[PSARC] Saved filenames.xml to output directory");
+                    }
+
+                    // Parse filenames.txt content
+                    // UnPSARC splits by both '\n' and '\0'
+                    let filenames_text = String::from_utf8_lossy(&filenames_data);
+                    let lines: Vec<&str> = filenames_text
+                        .split(|c| c == '\n' || c == '\0')
+                        .filter(|line| !line.trim().is_empty())
+                        .collect();
+
+                    // Build hash map: for each filename, calculate MD5 hash and map it
+                    // UnPSARC adds three versions: original, uppercase, and lowercase
+                    // Important: All hash variants should map to the ORIGINAL filename (not the transformed one)
+                    for line in lines {
+                        let trimmed = line.trim();
+                        if trimmed.is_empty() {
+                            continue;
+                        }
+
+                        // Store original filename for mapping
+                        let original_filename = trimmed.to_string();
+
+                        // Add original case hash -> original filename
+                        let hash_original = calculate_md5(trimmed);
+                        filename_map.insert(hash_original, original_filename.clone());
+
+                        // Add uppercase version hash -> original filename
+                        let upper = trimmed.to_ascii_uppercase();
+                        let hash_upper = calculate_md5(&upper);
+                        filename_map.insert(hash_upper, original_filename.clone());
+
+                        // Add lowercase version hash -> original filename
+                        let lower = trimmed.to_ascii_lowercase();
+                        let hash_lower = calculate_md5(&lower);
+                        filename_map.insert(hash_lower, original_filename);
+                    }
+
+                    eprintln!("[PSARC] Loaded {} filenames from filenames.txt", filename_map.len());
+                }
+                Err(e) => {
+                    eprintln!("[PSARC] Warning: Failed to read filenames.txt: {}", e);
+                    eprintln!("[PSARC] Will use hash-based filenames instead");
+                }
+            }
+        }
+    }
+
+    let total_entries = entries.len();
+    let mut extracted_count = 0;
+    let mut skipped_count = 0;
+    
+    for (idx, entry) in entries.iter().enumerate() {
+        // Skip entries with zero name_hash (filenames.txt manifest)
+        if entry.name_hash == [0; 16] {
+            skipped_count += 1;
+            continue;
+        }
+
+        // Skip entries with zero offset
+        if entry.offset == 0 {
+            skipped_count += 1;
+            continue;
+        }
+        
+        // Look up filename from hash map
+        let path = if let Some(filename) = filename_map.get(&entry.name_hash) {
+            // Found in filename map - use the original filename
+            // Replace forward slashes with OS-specific separator
+            let mut file_path = filename.replace('/', &std::path::MAIN_SEPARATOR.to_string());
+            // Remove leading separator if present (UnPSARC does this)
+            if file_path.starts_with(std::path::MAIN_SEPARATOR) {
+                file_path = file_path[1..].to_string();
+            }
+            file_path
+        } else {
+            // Not found in filename map - use hash-based filename
+            // Format hash without dashes for filename (UnPSARC uses Replace("-", ""))
+            let hash_hex = format!("{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+                entry.name_hash[0], entry.name_hash[1], entry.name_hash[2], entry.name_hash[3],
+                entry.name_hash[4], entry.name_hash[5], entry.name_hash[6], entry.name_hash[7],
+                entry.name_hash[8], entry.name_hash[9], entry.name_hash[10], entry.name_hash[11],
+                entry.name_hash[12], entry.name_hash[13], entry.name_hash[14], entry.name_hash[15]);
+            
+            // Put unknown files in _Unknowns directory (like UnPSARC does)
+            eprintln!("[PSARC] Archive contains a hash which is not in filenames table: {}", hash_to_string(&entry.name_hash));
+            format!("_Unknowns{}{}.bin", std::path::MAIN_SEPARATOR, hash_hex)
+        };
+        
+        extracted_count += 1;
+        progress_callback(ExtractionStatus {
+            current_file: path.clone(),
+            progress: (idx as f32) / (total_entries as f32),
+            is_extracting: true,
+            error: None,
+        });
+
+        let file_data = match read_file_data(&mmap, entry, &zsizes, block_size as usize) {
+            Ok(data) => {
+                if data.len() != entry.uncompressed_size as usize {
+                    eprintln!("[PSARC] Warning: File {} size mismatch: expected {}, got {}", 
+                             path, entry.uncompressed_size, data.len());
+                }
+                data
+            },
+            Err(e) => {
+                eprintln!("[PSARC] Failed to read file {} (offset: 0x{:X}, size: {}): {}", 
+                         path, entry.offset, entry.uncompressed_size, e);
+                return Err(e);
+            }
+        };
+
+        let output_path = output_dir.join(&path);
+        if let Some(parent) = output_path.parent() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                eprintln!("[PSARC] Failed to create directory for {}: {}", path, e);
+                return Err(e);
+            }
+        }
+
+        if let Err(e) = std::fs::write(&output_path, file_data) {
+            eprintln!("[PSARC] Failed to write file {}: {}", path, e);
+            return Err(e);
+        }
+    }
+    
+    eprintln!("[PSARC] Extraction summary: {} files extracted, {} entries skipped, {} total entries", 
+              extracted_count, skipped_count, total_entries);
+
+    progress_callback(ExtractionStatus {
+        current_file: "Done".to_string(),
+        progress: 1.0,
+        is_extracting: false,
+        error: None,
+    });
+
+    Ok(())
+}
+
+fn read_file_data(
+    mmap: &Mmap,
+    entry: &Entry,
+    zsizes: &[u16],
+    block_size: usize,
+) -> io::Result<Vec<u8>> {
+    let mut result = Vec::with_capacity(entry.uncompressed_size as usize);
+    let mut current_zsize_index = entry.zsize_index as usize;
+    let mut current_offset = entry.offset as usize;
+    let mut remaining = entry.uncompressed_size as usize;
+
+    // Verify offset is within bounds
+    if current_offset >= mmap.len() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("Entry offset {} is beyond file size {}", current_offset, mmap.len()),
+        ));
+    }
+
+    // Follow UnPSARC logic: loop until we've written all uncompressed data
+    while (result.len() as u64) < entry.uncompressed_size {
+        let zsize = zsizes.get(current_zsize_index)
+            .ok_or_else(|| io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("Invalid zsize index {} (max: {})", current_zsize_index, zsizes.len()),
+            ))?;
+
+        // UnPSARC logic: if zsize == 0, compressed_size = block_size
+        let compressed_size = if *zsize == 0 {
+            block_size
+        } else {
+            *zsize as usize
+        };
+
+        // Verify we can read the compressed block
+        if current_offset + compressed_size > mmap.len() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "Block read would exceed file bounds: offset {}, size {}, file size {}",
+                    current_offset, compressed_size, mmap.len()
+                ),
+            ));
+        }
+
+        let compressed_data = &mmap[current_offset..current_offset + compressed_size];
+        
+        // UnPSARC logic for determining how much to read/decompress
+        let decompressed = if compressed_size == entry.uncompressed_size as usize {
+            // Special case: entire file is uncompressed in one block
+            compressed_data.to_vec()
+        } else if *zsize == 0 {
+            // Uncompressed block
+            if remaining < block_size {
+                // Last block - only read remaining bytes
+                compressed_data[..remaining.min(compressed_data.len())].to_vec()
+            } else {
+                // Full block
+                compressed_data.to_vec()
+            }
+        } else {
+            // Compressed block - determine target size
+            let target_size = if remaining < block_size || compressed_size == block_size {
+                remaining
+            } else {
+                block_size
+            };
+            
+            // Check for zlib magic (0x78DA, 0x789C, etc.)
+            let is_zlib = compressed_data.len() >= 2 && 
+                          compressed_data[0] == 0x78 && 
+                          (compressed_data[1] == 0x9C || compressed_data[1] == 0xDA || 
+                           compressed_data[1] == 0x01 || compressed_data[1] == 0x5E);
+            
+            if is_zlib {
+                let mut decoder = ZlibDecoder::new(compressed_data);
+                let mut decompressed_block = Vec::with_capacity(target_size);
+                decoder.read_to_end(&mut decompressed_block)
+                    .map_err(|e| io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!(
+                            "Failed to decompress block at offset {} (zsize: {}, compressed_size: {}, target_size: {}): {}",
+                            current_offset, zsize, compressed_size, target_size, e
+                        ),
+                    ))?;
+                
+                // Truncate to target size if needed (UnPSARC reads exactly target_size)
+                if decompressed_block.len() > target_size {
+                    decompressed_block.truncate(target_size);
+                }
+                decompressed_block
+            } else {
+                // Not compressed or unknown format - return as-is (up to target_size)
+                compressed_data[..target_size.min(compressed_data.len())].to_vec()
+            }
+        };
+
+        // Copy the decompressed data
+        result.extend_from_slice(&decompressed);
+        
+        // UnPSARC logic: 
+        // - BlockOffset += CompressedSize (compressed size in file)
+        // - RemainingSize -= BlockSize (always subtract block_size, not actual read size)
+        current_offset += compressed_size;
+        remaining = remaining.saturating_sub(block_size);
+        current_zsize_index += 1;
+    }
+
+    Ok(result)
 }
