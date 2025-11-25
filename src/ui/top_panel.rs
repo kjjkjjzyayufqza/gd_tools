@@ -166,6 +166,20 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
                 render_right_toolbar(ui, state);
             });
         });
+
+        // Show progress bar below menu bar if packing, extracting, or testing
+        if state.is_packing || state.is_extracting || state.show_test_progress {
+            ui.separator();
+            ui.horizontal(|ui| {
+                if state.is_packing {
+                    ui.add(egui::ProgressBar::new(state.pack_progress).show_percentage());
+                } else if state.is_extracting {
+                    ui.add(egui::ProgressBar::new(state.extract_progress).show_percentage());
+                } else if state.show_test_progress {
+                    ui.add(egui::ProgressBar::new(state.test_progress).show_percentage());
+                }
+            });
+        }
     });
 }
 
@@ -282,6 +296,10 @@ fn render_left_menu(ui: &mut Ui, state: &mut AppState) {
         if ui.button("Reset Layout").clicked() {
             state.left_panel_visible = true;
             state.right_panel_visible = true;
+            // Reset panel widths to default and force recreation
+            state.left_panel_width = None;
+            state.right_panel_width = None;
+            state.layout_version += 1;
             ui.close();
         }
     });
@@ -333,45 +351,42 @@ fn render_left_menu(ui: &mut Ui, state: &mut AppState) {
 }
 
 fn render_right_toolbar(ui: &mut Ui, state: &mut AppState) {
-    if state.is_packing {
-        ui.add(egui::ProgressBar::new(state.pack_progress).show_percentage());
-        ui.label("Packing...");
-    } else {
-        // Pack PSARC button - placed before Status label (right side in RTL layout)
-        if ui.button("Pack PSARC").clicked() {
-            if let Some(root) = &state.current_root_dir {
-                if let Some(output) = FileDialog::new()
-                    .add_filter("PSARC Archive", &["psarc"])
-                    .save_file()
-                {
-                    // Start packing
-                    let (tx, rx) = crossbeam_channel::unbounded();
-                    state.pack_status_receiver = Some(rx);
-                    state.is_packing = true;
+    // Pack PSARC button - placed before Status label (right side in RTL layout)
+    if ui.button("Pack PSARC").clicked() {
+        if let Some(root) = &state.current_root_dir {
+            if let Some(output) = FileDialog::new()
+                .add_filter("PSARC Archive", &["psarc"])
+                .save_file()
+            {
+                // Start packing
+                let (tx, rx) = crossbeam_channel::unbounded();
+                state.pack_status_receiver = Some(rx);
+                state.is_packing = true;
 
-                    let root_clone = root.clone();
+                let root_clone = root.clone();
 
-                    // Call the PSARC module
-                    let _ = crate::psarc::pack_directory(&root_clone, &output, move |status| {
-                        let _ = tx.send(status);
-                    });
-                } else {
-                    state.status_message = "No output file selected!".to_string();
-                }
+                // Call the PSARC module
+                let _ = crate::psarc::pack_directory(&root_clone, &output, move |status| {
+                    let _ = tx.send(status);
+                });
             } else {
-                state.status_message = "No folder opened!".to_string();
+                state.status_message = "No output file selected!".to_string();
             }
+        } else {
+            state.status_message = "No folder opened!".to_string();
         }
     }
-    
-    if state.is_extracting {
-        ui.add(egui::ProgressBar::new(state.extract_progress).show_percentage());
-        ui.label("Extracting...");
-    }
 
     ui.separator();
-    ui.label(format!("Status: {}", state.status_message));
-    ui.separator();
+    if ui.button("Test Progress").clicked() {
+        state.show_test_progress = !state.show_test_progress;
+        state.test_progress = 0.0;
+        if state.show_test_progress {
+            state.status_message = "Test progress started.".to_owned();
+        } else {
+            state.status_message = "Test progress stopped.".to_owned();
+        }
+    }
     if ui.button("Refresh").clicked() {
         state.status_message = "Refreshing file list...".to_owned();
         // Re-scan if folder is open

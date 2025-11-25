@@ -8,11 +8,19 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
         return;
     }
 
-    SidePanel::left("left_panel")
+    let mut panel = SidePanel::left(format!("left_panel_{}", state.layout_version))
         .resizable(true)
-        .default_width(250.0)
         .min_width(150.0)
-        .max_width(1000.0)
+        .max_width(1000.0);
+
+    // Use custom width if set, otherwise use default
+    if let Some(width) = state.left_panel_width {
+        panel = panel.default_width(width);
+    } else {
+        panel = panel.default_width(250.0);
+    }
+
+    panel
         .show(ctx, |ui| {
             render_filters(ui, state);
             ui.separator();

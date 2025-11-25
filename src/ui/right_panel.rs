@@ -6,11 +6,19 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
         return;
     }
 
-    SidePanel::right("right_panel")
+    let mut panel = SidePanel::right(format!("right_panel_{}", state.layout_version))
         .resizable(true)
-        .default_width(500.0)
         .min_width(300.0)
-        .max_width(1200.0) // Allow the panel to be resized up to 1200 pixels
+        .max_width(1200.0); // Allow the panel to be resized up to 1200 pixels
+
+    // Use custom width if set, otherwise use default
+    if let Some(width) = state.right_panel_width {
+        panel = panel.default_width(width);
+    } else {
+        panel = panel.default_width(500.0);
+    }
+
+    panel
         .show(ctx, |ui| {
             // Ensure the scroll area fills the available space and doesn't shrink to content
             ScrollArea::vertical()
