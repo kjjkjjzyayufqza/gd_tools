@@ -14,3 +14,5 @@ target_wasm
 
 UnPSARC-master/*
 *.psarc
+xDocs/*
+*.evb

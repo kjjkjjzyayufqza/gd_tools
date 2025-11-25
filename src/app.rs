@@ -267,5 +267,11 @@ impl eframe::App for TemplateApp {
 
         // 10. Show notifications
         self.state.toasts.show(ctx);
+
+        // 11. Request continuous repainting when background tasks are running
+        // This ensures progress updates are shown even when the window is not focused
+        if self.state.is_packing || self.state.is_extracting || self.state.init_game_is_extracting {
+            ctx.request_repaint_after(Duration::from_millis(100));
+        }
     }
 }

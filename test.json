@@ -1,0 +1,782 @@
+{
+  "header": "FBKK",
+  "header_words": [
+    32,
+    14663,
+    32,
+    20,
+    0,
+    0,
+    0,
+    64,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    12704,
+    0,
+    1470338534,
+    0,
+    12720,
+    0,
+    553455173,
+    0,
+    12736,
+    0,
+    0,
+    0,
+    0,
+    0
+  ],
+  "header_string_refs": [
+    {
+      "word_index": 0,
+      "offset": 32,
+      "value": "@"
+    },
+    {
+      "word_index": 2,
+      "offset": 32,
+      "value": "@"
+    },
+    {
+      "word_index": 4,
+      "offset": 0,
+      "value": "FBKK "
+    },
+    {
+      "word_index": 5,
+      "offset": 0,
+      "value": "FBKK "
+    },
+    {
+      "word_index": 6,
+      "offset": 0,
+      "value": "FBKK "
+    },
+    {
+      "word_index": 8,
+      "offset": 0,
+      "value": "FBKK "
+    },
+    {
+      "word_index": 9,
+      "offset": 0,
+      "value": "FBKK "
+    },
+    {
+      "word_index": 10,
+      "offset": 0,
+      "value": "FBKK "
+    },
+    {
+      "word_index": 11,
+      "offset": 0,
+      "value": "FBKK "
+    },
+    {
+      "word_index": 12,
+      "offset": 0,
+      "value": "FBKK "
+    },
+    {
+      "word_index": 13,
+      "offset": 0,
+      "value": "FBKK "
+    },
+    {
+      "word_index": 14,
+      "offset": 0,
+      "value": "FBKK "
+    },
+    {
+      "word_index": 15,
+      "offset": 0,
+      "value": "FBKK "
+    },
+    {
+      "word_index": 16,
+      "offset": 0,
+      "value": "FBKK "
+    },
+    {
+      "word_index": 17,
+      "offset": 12704,
+      "value": "city_outrange"
+    },
+    {
+      "word_index": 18,
+      "offset": 0,
+      "value": "FBKK "
+    },
+    {
+      "word_index": 20,
+      "offset": 0,
+      "value": "FBKK "
+    },
+    {
+      "word_index": 21,
+      "offset": 12720,
+      "value": "root"
+    },
+    {
+      "word_index": 22,
+      "offset": 0,
+      "value": "FBKK "
+    },
+    {
+      "word_index": 24,
+      "offset": 0,
+      "value": "FBKK "
+    },
+    {
+      "word_index": 25,
+      "offset": 12736,
+      "value": "|"
+    },
+    {
+      "word_index": 26,
+      "offset": 0,
+      "value": "FBKK "
+    },
+    {
+      "word_index": 27,
+      "offset": 0,
+      "value": "FBKK "
+    },
+    {
+      "word_index": 28,
+      "offset": 0,
+      "value": "FBKK "
+    },
+    {
+      "word_index": 29,
+      "offset": 0,
+      "value": "FBKK "
+    },
+    {
+      "word_index": 30,
+      "offset": 0,
+      "value": "FBKK "
+    }
+  ],
+  "strings": [
+    {
+      "offset": 0,
+      "value": "FBKK "
+    },
+    {
+      "offset": 618,
+      "value": "<L8e"
+    },
+    {
+      "offset": 844,
+      "value": "J`{?F"
+    },
+    {
+      "offset": 893,
+      "value": "<p?3"
+    },
+    {
+      "offset": 943,
+      "value": "?|bPCJ"
+    },
+    {
+      "offset": 988,
+      "value": "^-s?M"
+    },
+    {
+      "offset": 1149,
+      "value": "<p?)"
+    },
+    {
+      "offset": 1242,
+      "value": "<L8e"
+    },
+    {
+      "offset": 1470,
+      "value": "t?+F"
+    },
+    {
+      "offset": 1618,
+      "value": "*B-("
+    },
+    {
+      "offset": 1662,
+      "value": "P?\\?"
+    },
+    {
+      "offset": 1965,
+      "value": "<p?)"
+    },
+    {
+      "offset": 2058,
+      "value": "<L8e"
+    },
+    {
+      "offset": 2286,
+      "value": "t?+F"
+    },
+    {
+      "offset": 2434,
+      "value": "*B-("
+    },
+    {
+      "offset": 2478,
+      "value": "P?\\?"
+    },
+    {
+      "offset": 2544,
+      "value": "@y1Cq"
+    },
+    {
+      "offset": 2564,
+      "value": "0/8?"
+    },
+    {
+      "offset": 2593,
+      "value": "75Cs"
+    },
+    {
+      "offset": 2620,
+      "value": "c+h?I>"
+    },
+    {
+      "offset": 2925,
+      "value": "<p?)"
+    },
+    {
+      "offset": 3018,
+      "value": "<L8e"
+    },
+    {
+      "offset": 3246,
+      "value": "t?+F"
+    },
+    {
+      "offset": 3394,
+      "value": "*B-("
+    },
+    {
+      "offset": 3438,
+      "value": "P?\\?"
+    },
+    {
+      "offset": 3504,
+      "value": "@y1Cq"
+    },
+    {
+      "offset": 3524,
+      "value": "0/8?"
+    },
+    {
+      "offset": 3580,
+      "value": "c+h?"
+    },
+    {
+      "offset": 3606,
+      "value": "}C+>GC"
+    },
+    {
+      "offset": 3699,
+      "value": "CEjUC^g)C"
+    },
+    {
+      "offset": 3733,
+      "value": "-:C>r}"
+    },
+    {
+      "offset": 3744,
+      "value": "cVPC"
+    },
+    {
+      "offset": 3891,
+      "value": "CEjUC*7QB"
+    },
+    {
+      "offset": 4077,
+      "value": "<p?)"
+    },
+    {
+      "offset": 4170,
+      "value": "<L8e"
+    },
+    {
+      "offset": 4509,
+      "value": "<p?)"
+    },
+    {
+      "offset": 4602,
+      "value": "<L8e"
+    },
+    {
+      "offset": 4752,
+      "value": "cVPC"
+    },
+    {
+      "offset": 4782,
+      "value": "z?8`a"
+    },
+    {
+      "offset": 4803,
+      "value": "CEjUC^g)C"
+    },
+    {
+      "offset": 4837,
+      "value": "-:C>r}"
+    },
+    {
+      "offset": 4902,
+      "value": "}C+>GC"
+    },
+    {
+      "offset": 4972,
+      "value": "c+h?"
+    },
+    {
+      "offset": 4992,
+      "value": "@y1Cq"
+    },
+    {
+      "offset": 5012,
+      "value": "0/8?"
+    },
+    {
+      "offset": 5118,
+      "value": "P?,g"
+    },
+    {
+      "offset": 5170,
+      "value": "*B-("
+    },
+    {
+      "offset": 5310,
+      "value": "t?+F"
+    },
+    {
+      "offset": 5523,
+      "value": "CEjUC*7QB"
+    },
+    {
+      "offset": 5908,
+      "value": "!;s?"
+    },
+    {
+      "offset": 6324,
+      "value": "S#|?"
+    },
+    {
+      "offset": 6842,
+      "value": "<L8e"
+    },
+    {
+      "offset": 7210,
+      "value": "<L8e"
+    },
+    {
+      "offset": 7504,
+      "value": "f-4@"
+    },
+    {
+      "offset": 7578,
+      "value": "<L8e"
+    },
+    {
+      "offset": 7861,
+      "value": "(RB<"
+    },
+    {
+      "offset": 7946,
+      "value": "<L8e"
+    },
+    {
+      "offset": 8033,
+      "value": "?yC&%&C"
+    },
+    {
+      "offset": 8245,
+      "value": "`o@\\"
+    },
+    {
+      "offset": 8314,
+      "value": "<L8e"
+    },
+    {
+      "offset": 8682,
+      "value": "<L8e"
+    },
+    {
+      "offset": 8860,
+      "value": "%= ?"
+    },
+    {
+      "offset": 8867,
+      "value": "?*J>C"
+    },
+    {
+      "offset": 8883,
+      "value": "CEjUC^g)C"
+    },
+    {
+      "offset": 9010,
+      "value": "WA*J>Cp"
+    },
+    {
+      "offset": 9043,
+      "value": "9fI@> "
+    },
+    {
+      "offset": 9051,
+      "value": "7.r{"
+    },
+    {
+      "offset": 9059,
+      "value": "BJM9C"
+    },
+    {
+      "offset": 11313,
+      "value": "M\":="
+    },
+    {
+      "offset": 11985,
+      "value": "M\":="
+    },
+    {
+      "offset": 12704,
+      "value": "city_outrange"
+    },
+    {
+      "offset": 12720,
+      "value": "root"
+    },
+    {
+      "offset": 12752,
+      "value": "cubesensormulti_outrange_until_ep08"
+    },
+    {
+      "offset": 12800,
+      "value": "cubesensormulti"
+    },
+    {
+      "offset": 12816,
+      "value": "onEnter"
+    },
+    {
+      "offset": 12848,
+      "value": "onLeave"
+    },
+    {
+      "offset": 12864,
+      "value": "cityoutrange_OnLeave"
+    },
+    {
+      "offset": 12896,
+      "value": "filtertype"
+    },
+    {
+      "offset": 12912,
+      "value": "filtername"
+    },
+    {
+      "offset": 12928,
+      "value": "maxcount"
+    },
+    {
+      "offset": 12944,
+      "value": "shapes"
+    },
+    {
+      "offset": 12960,
+      "value": "cubesensormulti_outrange_until_ep10"
+    },
+    {
+      "offset": 13008,
+      "value": "cubesensormulti_outrange_until_ep12"
+    },
+    {
+      "offset": 13056,
+      "value": "cubesensormulti_outrange_until_ep13"
+    },
+    {
+      "offset": 13104,
+      "value": "cubesensormulti_outrange_until_epUG"
+    },
+    {
+      "offset": 13152,
+      "value": "cubesensormulti_outrange_to_underground"
+    },
+    {
+      "offset": 13200,
+      "value": "checkpoint_outrange_cc"
+    },
+    {
+      "offset": 13232,
+      "value": "checkpoint"
+    },
+    {
+      "offset": 13248,
+      "value": "auto_check"
+    },
+    {
+      "offset": 13264,
+      "value": "checkpoint_outrange_ed"
+    },
+    {
+      "offset": 13296,
+      "value": "checkpoint_outrange_id"
+    },
+    {
+      "offset": 13328,
+      "value": "checkpoint_outrange_dt"
+    },
+    {
+      "offset": 13360,
+      "value": "checkpoint_outrange_ug"
+    },
+    {
+      "offset": 13392,
+      "value": "cubesensor_area_ug"
+    },
+    {
+      "offset": 13424,
+      "value": "cubesensor"
+    },
+    {
+      "offset": 13440,
+      "value": "area_ug_OnEntor"
+    },
+    {
+      "offset": 13456,
+      "value": "area_ug_OnLeave"
+    },
+    {
+      "offset": 13472,
+      "value": "shape"
+    },
+    {
+      "offset": 13488,
+      "value": "cubesensor_area_dt"
+    },
+    {
+      "offset": 13520,
+      "value": "area_dt_OnEntor"
+    },
+    {
+      "offset": 13536,
+      "value": "area_dt_OnLeave"
+    },
+    {
+      "offset": 13552,
+      "value": "cubesensor_area_id"
+    },
+    {
+      "offset": 13584,
+      "value": "area_id_OnEntor"
+    },
+    {
+      "offset": 13600,
+      "value": "area_id_OnLeave"
+    },
+    {
+      "offset": 13616,
+      "value": "cubesensor_area_ed"
+    },
+    {
+      "offset": 13648,
+      "value": "area_ed_OnEntor"
+    },
+    {
+      "offset": 13664,
+      "value": "area_ed_OnLeave"
+    },
+    {
+      "offset": 13680,
+      "value": "cubesensor_area_cc"
+    },
+    {
+      "offset": 13712,
+      "value": "area_cc_OnEntor"
+    },
+    {
+      "offset": 13728,
+      "value": "area_cc_OnLeave"
+    },
+    {
+      "offset": 13744,
+      "value": "cubesensormulti_eps3"
+    },
+    {
+      "offset": 13776,
+      "value": "eps3_start_OnEnter"
+    },
+    {
+      "offset": 13808,
+      "value": "checkpoint_eps3a_point1"
+    },
+    {
+      "offset": 13840,
+      "value": "locator_cam1"
+    },
+    {
+      "offset": 13856,
+      "value": "locator"
+    },
+    {
+      "offset": 13872,
+      "value": "visibility"
+    },
+    {
+      "offset": 13888,
+      "value": "locator_cam2"
+    },
+    {
+      "offset": 13904,
+      "value": "viewcontrol_demo1"
+    },
+    {
+      "offset": 13936,
+      "value": "viewcontrol"
+    },
+    {
+      "offset": 13952,
+      "value": "locator_aim"
+    },
+    {
+      "offset": 13968,
+      "value": "viewcontrol_demo1|locator_aim"
+    },
+    {
+      "offset": 14000,
+      "value": "locator_dist"
+    },
+    {
+      "offset": 14016,
+      "value": "viewcontrol_demo1|locator_dist"
+    },
+    {
+      "offset": 14048,
+      "value": "viewcontrol_demo2"
+    },
+    {
+      "offset": 14080,
+      "value": "viewcontrol_demo2|locator_aim"
+    },
+    {
+      "offset": 14112,
+      "value": "viewcontrol_demo2|locator_dist"
+    },
+    {
+      "offset": 14144,
+      "value": "actor2_neb01"
+    },
+    {
+      "offset": 14160,
+      "value": "actor2"
+    },
+    {
+      "offset": 14176,
+      "value": "spawn"
+    },
+    {
+      "offset": 14192,
+      "value": "modelName"
+    },
+    {
+      "offset": 14208,
+      "value": "neb01_base"
+    },
+    {
+      "offset": 14224,
+      "value": "skeletonName"
+    },
+    {
+      "offset": 14240,
+      "value": "animations"
+    },
+    {
+      "offset": 14256,
+      "value": "city_outrangeactor_neb01_anim"
+    },
+    {
+      "offset": 14288,
+      "value": "datasheet_character_asset_animation"
+    },
+    {
+      "offset": 14336,
+      "value": "stay"
+    },
+    {
+      "offset": 14352,
+      "value": "neb01_stay_00"
+    },
+    {
+      "offset": 14368,
+      "value": "filename"
+    },
+    {
+      "offset": 14384,
+      "value": "loop"
+    },
+    {
+      "offset": 14400,
+      "value": "enableCollision"
+    },
+    {
+      "offset": 14416,
+      "value": "collisionName"
+    },
+    {
+      "offset": 14432,
+      "value": "capsuleHeight"
+    },
+    {
+      "offset": 14448,
+      "value": "capsuleRadius"
+    },
+    {
+      "offset": 14464,
+      "value": "attract"
+    },
+    {
+      "offset": 14480,
+      "value": "attachmentName"
+    },
+    {
+      "offset": 14496,
+      "value": "attachmentDataSheet"
+    },
+    {
+      "offset": 14528,
+      "value": "actor2_kitten01"
+    },
+    {
+      "offset": 14544,
+      "value": "kit01_base"
+    },
+    {
+      "offset": 14560,
+      "value": "city_outrangeactor_kitten01_anim"
+    },
+    {
+      "offset": 14608,
+      "value": "kit01_stay_00"
+    },
+    {
+      "offset": 14624,
+      "value": "turn_r"
+    },
+    {
+      "offset": 14640,
+      "value": "kit01_turn_00"
+    },
+    {
+      "offset": 14656,
+      "value": "turn_l"
+    }
+  ]
+}
