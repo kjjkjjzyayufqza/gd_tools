@@ -55,6 +55,22 @@ pub struct AppState {
     pub packing_mode: PackingMode,
     #[serde(skip)]
     pub show_settings: bool,
+    #[serde(skip)]
+    pub show_init_game_dialog: bool,
+    #[serde(skip)]
+    pub init_game_psarc_files: [Option<PathBuf>; 5],
+    #[serde(skip)]
+    pub init_game_output_dir: Option<PathBuf>,
+    #[serde(skip)]
+    pub init_game_extraction_receiver: Option<crossbeam_channel::Receiver<(bool, String, Vec<String>)>>,
+    #[serde(skip)]
+    pub init_game_extraction_progress_receiver: Option<crossbeam_channel::Receiver<(f32, String)>>,
+    #[serde(skip)]
+    pub init_game_is_extracting: bool,
+    #[serde(skip)]
+    pub init_game_extraction_progress: f32,
+    #[serde(skip)]
+    pub init_game_current_file: String,
 
     // Runtime-only state (skipped during serialization)
     #[serde(skip)]
@@ -123,6 +139,14 @@ impl Default for AppState {
             compression_level: CompressionLevel::Best,
             packing_mode: PackingMode::Full,
             show_settings: false,
+            show_init_game_dialog: false,
+            init_game_psarc_files: [None, None, None, None, None],
+            init_game_output_dir: None,
+            init_game_extraction_receiver: None,
+            init_game_extraction_progress_receiver: None,
+            init_game_is_extracting: false,
+            init_game_extraction_progress: 0.0,
+            init_game_current_file: String::new(),
             selected_file: None,
             status_message: "Ready".to_owned(),
             current_root_dir: None,

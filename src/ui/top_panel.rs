@@ -274,6 +274,10 @@ fn render_left_menu(ui: &mut Ui, state: &mut AppState) {
             ui.close();
         }
         ui.separator();
+        if ui.button("Init Game Resources...").clicked() {
+            state.show_init_game_dialog = true;
+            ui.close();
+        }
         if ui.button("Pack Folder...").clicked() {
             if let Some(root) = &state.current_root_dir {
                 // Check for incremental packing

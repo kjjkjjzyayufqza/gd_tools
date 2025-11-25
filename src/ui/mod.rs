@@ -5,3 +5,4 @@ pub mod left_panel;
 pub mod right_panel;
 pub mod top_panel;
 pub mod settings_modal;
+pub mod init_game_modal;

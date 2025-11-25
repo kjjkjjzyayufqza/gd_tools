@@ -1,5 +1,5 @@
 use crate::ui::{
-    app_state::AppState, center_panel, floating_window, left_panel, right_panel, settings_modal, top_panel,
+    app_state::AppState, center_panel, floating_window, init_game_modal, left_panel, right_panel, settings_modal, top_panel,
 };
 use std::time::Duration;
 
@@ -235,7 +235,34 @@ impl eframe::App for TemplateApp {
         // 6. Settings Modal
         settings_modal::show(ctx, &mut self.state);
 
-        // 7. Show notifications
+        // 7. Init Game Resources Modal
+        init_game_modal::show(ctx, &mut self.state);
+
+        // 8. Process init game extraction completion
+        let mut extraction_completed = false;
+        if let Some(rx) = &self.state.init_game_extraction_receiver {
+            while let Ok((success, message, errors)) = rx.try_recv() {
+                extraction_completed = true;
+                if success {
+                    self.state.toasts.success(&message)
+                        .duration(Duration::from_secs(5));
+                } else {
+                    self.state.toasts.error(&message)
+                        .duration(Duration::from_secs(10));
+                    if !errors.is_empty() {
+                        for error in errors {
+                            self.state.toasts.error(&error)
+                                .duration(Duration::from_secs(5));
+                        }
+                    }
+                }
+            }
+        }
+        if extraction_completed {
+            self.state.init_game_extraction_receiver = None;
+        }
+
+        // 9. Show notifications
         self.state.toasts.show(ctx);
     }
 }
