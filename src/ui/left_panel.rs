@@ -1,7 +1,12 @@
-use super::app_state::AppState;
-use egui::{CollapsingHeader, ScrollArea, SidePanel, TextEdit, Color32, RichText};
+use super::app_state::{AppState, CachedTreeNode, FlatTreeItem};
+use egui::{ScrollArea, SidePanel, TextEdit, Color32, RichText};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+
+// Modified indicator - yellow/orange dot like VS Code
+const MODIFIED_INDICATOR: &str = " ●";
+const MODIFIED_COLOR: Color32 = Color32::from_rgb(255, 193, 7); // Amber/Orange yellow
+const ROW_HEIGHT: f32 = 20.0; // Approximate height per row for virtual scrolling
 
 pub fn show(ctx: &egui::Context, state: &mut AppState) {
     if !state.left_panel_visible {
@@ -24,7 +29,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
         .show(ctx, |ui| {
             render_filters(ui, state);
             ui.separator();
-            render_file_list(ui, state);
+            render_file_list_optimized(ui, state);
         });
 }
 
@@ -40,38 +45,155 @@ fn render_filters(ui: &mut egui::Ui, state: &mut AppState) {
     });
 }
 
-fn render_file_list(ui: &mut egui::Ui, state: &mut AppState) {
+/// Optimized file list rendering with caching and virtual scrolling
+fn render_file_list_optimized(ui: &mut egui::Ui, state: &mut AppState) {
+    if state.loaded_files.is_empty() {
+        ui.label("No files loaded. Open a folder to start.");
+        return;
+    }
+
+    // Show root folder name
+    if let Some(root) = &state.current_root_dir {
+        ui.label(format!(
+            "📂 {} ({} files)",
+            root.file_name().unwrap_or_default().to_string_lossy(),
+            state.loaded_files.len()
+        ));
+    }
+
+    // Ensure tree is built and cached
+    ensure_tree_cached(state);
+
+    // Build flat list of visible items for virtual scrolling
+    let flat_items = build_visible_flat_list(state);
+    let total_items = flat_items.len();
+
+    if total_items == 0 {
+        ui.label("No matching files found.");
+        return;
+    }
+
+    // Clone necessary state to avoid borrow issues
+    let modified_files = state.modified_files.clone();
+    let folders_with_modified = state.folders_with_modified.clone();
+    let expanded_folders = state.expanded_folders.clone();
+    let selected_file = state.selected_file.clone();
+    let search_query = state.search_query.clone();
+
+    // Collect UI actions to apply after rendering
+    let mut new_selected_file: Option<String> = None;
+    let mut folders_to_toggle: Vec<String> = Vec::new();
+
+    // Virtual scrolling with fixed row height
     ScrollArea::vertical()
         .auto_shrink([false, false])
-        .show(ui, |ui| {
-            if state.loaded_files.is_empty() {
-                ui.label("No files loaded. Open a folder to start.");
-            } else {
-                if let Some(root) = &state.current_root_dir {
-                    ui.label(format!(
-                        "📂 {}",
-                        root.file_name().unwrap_or_default().to_string_lossy()
-                    ));
-                }
+        .show_rows(ui, ROW_HEIGHT, total_items, |ui, row_range| {
+            for row_idx in row_range {
+                if let Some(item) = flat_items.get(row_idx) {
+                    let indent = "  ".repeat(item.depth);
+                    
+                    if item.is_file {
+                        // Render file
+                        let is_modified = is_file_modified(&item.full_path, &modified_files);
+                        let is_selected = selected_file
+                            .as_deref()
+                            .map(|s| s == item.full_path)
+                            .unwrap_or(false);
 
-                let tree = build_file_tree(&state.loaded_files);
-                // Clone modified_files to avoid borrow issues
-                let modified_files = state.modified_files.clone();
-                render_tree_node(ui, state, &tree, "", &modified_files);
+                        ui.horizontal(|ui| {
+                            let display_name = format!("{}📄 {}", indent, item.name);
+                            let response = ui
+                                .selectable_label(is_selected, display_name)
+                                .on_hover_text(if is_modified {
+                                    format!("{} (Modified)", &item.full_path)
+                                } else {
+                                    item.full_path.clone()
+                                });
+
+                            if response.clicked() {
+                                new_selected_file = Some(item.full_path.clone());
+                            }
+
+                            if is_modified {
+                                ui.label(RichText::new(MODIFIED_INDICATOR).color(MODIFIED_COLOR).strong());
+                            }
+                        });
+                    } else {
+                        // Render folder
+                        let is_expanded = expanded_folders.contains(&item.full_path);
+                        let has_modified = folders_with_modified.contains(&item.full_path);
+
+                        let arrow = if is_expanded { "▼" } else { "▶" };
+                        let folder_icon = "📂";
+                        
+                        let display_text = if has_modified {
+                            format!("{}{} {} {}{}", indent, arrow, folder_icon, item.name, MODIFIED_INDICATOR)
+                        } else {
+                            format!("{}{} {} {}", indent, arrow, folder_icon, item.name)
+                        };
+
+                        // Add child count for collapsed folders with many items
+                        let display_with_count = if !is_expanded && item.child_count > 0 {
+                            format!("{} ({})", display_text, item.child_count)
+                        } else {
+                            display_text
+                        };
+
+                        let response = ui.selectable_label(false, display_with_count);
+                        
+                        if response.clicked() {
+                            folders_to_toggle.push(item.full_path.clone());
+                        }
+                    }
+                }
             }
         });
+
+    // Apply collected UI actions
+    if let Some(selected) = new_selected_file {
+        state.selected_file = Some(selected);
+    }
+
+    for folder in folders_to_toggle {
+        if state.expanded_folders.contains(&folder) {
+            state.expanded_folders.remove(&folder);
+        } else {
+            state.expanded_folders.insert(folder);
+
+            // Auto-expand when searching
+            if !search_query.is_empty() {
+                // Already expanded
+            }
+        }
+    }
 }
 
-#[derive(Debug, Clone)]
-struct TreeNode {
-    name: String,
-    full_path: String,
-    children: HashMap<String, TreeNode>,
-    is_file: bool,
+/// Ensure the tree is built and cached
+fn ensure_tree_cached(state: &mut AppState) {
+    let current_hash = state.compute_files_hash();
+    
+    if state.cached_tree.is_none() || state.loaded_files_hash != current_hash {
+        // Rebuild tree
+        state.cached_tree = Some(build_cached_tree(&state.loaded_files));
+        state.loaded_files_hash = current_hash;
+        
+        // Force rebuild of folders_with_modified
+        state.folders_with_modified_version = 0;
+    }
+    
+    // Update modified folders cache when modified_files changes
+    if state.folders_with_modified_version != state.modified_files_version {
+        if let Some(tree) = &state.cached_tree {
+            state.folders_with_modified = compute_folders_with_modified(tree, &state.modified_files);
+            state.folders_with_modified_version = state.modified_files_version;
+        }
+    }
 }
 
-fn build_file_tree(files: &[PathBuf]) -> TreeNode {
-    let mut root = TreeNode {
+/// Build the cached tree structure from file paths
+fn build_cached_tree(files: &[PathBuf]) -> CachedTreeNode {
+    // Use a temporary HashMap for building, then convert to sorted Vec
+    let mut temp_root = TempTreeNode {
         name: String::new(),
         full_path: String::new(),
         children: HashMap::new(),
@@ -79,21 +201,29 @@ fn build_file_tree(files: &[PathBuf]) -> TreeNode {
     };
 
     for file_path in files {
-        // Use to_string_lossy to handle non-UTF-8 paths (including Chinese characters)
         let components: Vec<String> = file_path
             .iter()
             .map(|c| c.to_string_lossy().to_string())
             .collect();
 
         if !components.is_empty() {
-            root.insert_path(&components, 0);
+            temp_root.insert_path(&components, 0);
         }
     }
 
-    root
+    // Convert to cached tree with sorted children
+    convert_to_cached_tree(&temp_root)
 }
 
-impl TreeNode {
+/// Temporary tree node for building (uses HashMap for O(1) insertion)
+struct TempTreeNode {
+    name: String,
+    full_path: String,
+    children: HashMap<String, TempTreeNode>,
+    is_file: bool,
+}
+
+impl TempTreeNode {
     fn insert_path(&mut self, components: &[String], index: usize) {
         if index >= components.len() {
             return;
@@ -107,7 +237,7 @@ impl TreeNode {
         if !self.children.contains_key(&component) {
             self.children.insert(
                 component.clone(),
-                TreeNode {
+                TempTreeNode {
                     name: component.clone(),
                     full_path: full_path.clone(),
                     children: HashMap::new(),
@@ -124,7 +254,136 @@ impl TreeNode {
     }
 }
 
-fn matches_search(node: &TreeNode, search_query: &str) -> bool {
+/// Convert temporary tree to cached tree with sorted children and file counts
+fn convert_to_cached_tree(temp: &TempTreeNode) -> CachedTreeNode {
+    let mut children: Vec<CachedTreeNode> = temp.children
+        .values()
+        .map(convert_to_cached_tree)
+        .collect();
+
+    // Sort: folders first, then files, alphabetically within each group
+    children.sort_by(|a, b| {
+        match (a.is_file, b.is_file) {
+            (true, false) => std::cmp::Ordering::Greater,
+            (false, true) => std::cmp::Ordering::Less,
+            _ => a.name.cmp(&b.name),
+        }
+    });
+
+    // Calculate file count
+    let file_count = if temp.is_file {
+        1
+    } else {
+        children.iter().map(|c| c.file_count).sum()
+    };
+
+    CachedTreeNode {
+        name: temp.name.clone(),
+        full_path: temp.full_path.clone(),
+        children,
+        is_file: temp.is_file,
+        file_count,
+    }
+}
+
+/// Compute set of folder paths that contain modified files
+fn compute_folders_with_modified(tree: &CachedTreeNode, modified_files: &HashSet<PathBuf>) -> HashSet<String> {
+    let mut result = HashSet::new();
+    compute_folders_with_modified_recursive(tree, modified_files, &mut result);
+    result
+}
+
+fn compute_folders_with_modified_recursive(
+    node: &CachedTreeNode,
+    modified_files: &HashSet<PathBuf>,
+    result: &mut HashSet<String>,
+) -> bool {
+    if node.is_file {
+        let path = PathBuf::from(&node.full_path);
+        return modified_files.contains(&path);
+    }
+
+    let mut has_modified = false;
+    for child in &node.children {
+        if compute_folders_with_modified_recursive(child, modified_files, result) {
+            has_modified = true;
+        }
+    }
+
+    if has_modified && !node.full_path.is_empty() {
+        result.insert(node.full_path.clone());
+    }
+
+    has_modified
+}
+
+/// Build a flat list of currently visible items based on expanded folders
+fn build_visible_flat_list(state: &AppState) -> Vec<FlatTreeItem> {
+    let mut items = Vec::new();
+    
+    if let Some(tree) = &state.cached_tree {
+        let search_query = state.search_query.trim();
+        
+        // For root node, add all children
+        for child in &tree.children {
+            build_flat_list_recursive(
+                child,
+                0,
+                &state.expanded_folders,
+                search_query,
+                &mut items,
+            );
+        }
+    }
+
+    items
+}
+
+fn build_flat_list_recursive(
+    node: &CachedTreeNode,
+    depth: usize,
+    expanded_folders: &HashSet<String>,
+    search_query: &str,
+    items: &mut Vec<FlatTreeItem>,
+) {
+    // Check if this node or any children match the search
+    let matches_search = matches_search_cached(node, search_query);
+    let has_matching_children = has_matching_children_cached(node, search_query);
+    
+    if !matches_search && !has_matching_children {
+        return;
+    }
+
+    // Add this node to the flat list
+    items.push(FlatTreeItem {
+        name: node.name.clone(),
+        full_path: node.full_path.clone(),
+        is_file: node.is_file,
+        depth,
+        child_count: node.file_count,
+        has_children: !node.children.is_empty(),
+    });
+
+    // For folders, only recurse if expanded (or if searching and has matches)
+    if !node.is_file {
+        let is_expanded = expanded_folders.contains(&node.full_path);
+        let force_expand = !search_query.is_empty() && has_matching_children;
+        
+        if is_expanded || force_expand {
+            for child in &node.children {
+                build_flat_list_recursive(
+                    child,
+                    depth + 1,
+                    expanded_folders,
+                    search_query,
+                    items,
+                );
+            }
+        }
+    }
+}
+
+fn matches_search_cached(node: &CachedTreeNode, search_query: &str) -> bool {
     if search_query.is_empty() {
         return true;
     }
@@ -134,16 +393,16 @@ fn matches_search(node: &TreeNode, search_query: &str) -> bool {
         || node.full_path.to_lowercase().contains(&query_lower)
 }
 
-fn has_matching_children(node: &TreeNode, search_query: &str) -> bool {
+fn has_matching_children_cached(node: &CachedTreeNode, search_query: &str) -> bool {
     if search_query.is_empty() {
         return true;
     }
 
-    for child in node.children.values() {
-        if matches_search(child, search_query) {
+    for child in &node.children {
+        if matches_search_cached(child, search_query) {
             return true;
         }
-        if !child.is_file && has_matching_children(child, search_query) {
+        if !child.is_file && has_matching_children_cached(child, search_query) {
             return true;
         }
     }
@@ -151,163 +410,9 @@ fn has_matching_children(node: &TreeNode, search_query: &str) -> bool {
     false
 }
 
-/// Check if a node or any of its children have been modified
-fn has_modified_children(node: &TreeNode, modified_files: &HashSet<PathBuf>) -> bool {
-    if node.is_file {
-        let path = PathBuf::from(&node.full_path);
-        return modified_files.contains(&path);
-    }
-    
-    for child in node.children.values() {
-        if has_modified_children(child, modified_files) {
-            return true;
-        }
-    }
-    false
-}
-
-/// Check if a specific file path is modified
 fn is_file_modified(full_path: &str, modified_files: &HashSet<PathBuf>) -> bool {
     let path = PathBuf::from(full_path);
     modified_files.contains(&path)
 }
 
-// Modified indicator - yellow/orange dot like VS Code
-const MODIFIED_INDICATOR: &str = " ●";
-const MODIFIED_COLOR: Color32 = Color32::from_rgb(255, 193, 7); // Amber/Orange yellow
 
-fn render_tree_node(
-    ui: &mut egui::Ui,
-    state: &mut AppState,
-    node: &TreeNode,
-    indent: &str,
-    modified_files: &HashSet<PathBuf>,
-) {
-    let search_query = state.search_query.trim();
-    let should_show = matches_search(node, search_query) || has_matching_children(node, search_query);
-
-    if node.name.is_empty() {
-        // Root node - render all children
-        let mut sorted_children: Vec<_> = node.children.values().collect();
-        sorted_children.sort_by(|a, b| {
-            match (a.is_file, b.is_file) {
-                (true, false) => std::cmp::Ordering::Greater,
-                (false, true) => std::cmp::Ordering::Less,
-                _ => a.name.cmp(&b.name),
-            }
-        });
-
-        for child in sorted_children {
-            render_tree_node(ui, state, child, indent, modified_files);
-        }
-        return;
-    }
-
-    if !should_show {
-        return;
-    }
-
-    if node.is_file {
-        // Check if this file is modified
-        let is_modified = is_file_modified(&node.full_path, modified_files);
-        let is_selected = state
-            .selected_file
-            .as_deref()
-            .map(|s| s == node.full_path)
-            .unwrap_or(false);
-
-        // Render file with optional modified indicator
-        ui.horizontal(|ui| {
-            let display_name = format!("{}📄 {}", indent, node.name);
-            let response = ui
-                .selectable_label(is_selected, display_name)
-                .on_hover_text(if is_modified {
-                    format!("{} (Modified)", &node.full_path)
-                } else {
-                    node.full_path.clone()
-                });
-
-            if response.clicked() {
-                state.selected_file = Some(node.full_path.clone());
-            }
-
-            // Show modified indicator dot after the file name
-            if is_modified {
-                ui.label(RichText::new(MODIFIED_INDICATOR).color(MODIFIED_COLOR).strong());
-            }
-        });
-    } else {
-        // Render folder
-        let folder_key = node.full_path.clone();
-        let has_matches = has_matching_children(node, search_query);
-        let should_expand = has_matches && !search_query.is_empty();
-        let was_expanded = state.expanded_folders.contains(&folder_key) || should_expand;
-        
-        // Check if this folder has any modified children
-        let has_modified = has_modified_children(node, modified_files);
-
-        // Auto-expand folders containing matches when searching
-        if should_expand && !state.expanded_folders.contains(&folder_key) {
-            state.expanded_folders.insert(folder_key.clone());
-        }
-
-        // Build folder display name with optional modified indicator
-        let folder_display = if has_modified {
-            format!("{}📂 {}{}", indent, node.name, MODIFIED_INDICATOR)
-        } else {
-            format!("{}📂 {}", indent, node.name)
-        };
-
-        // Create header with custom text coloring for modified indicator
-        let header_response = if has_modified {
-            CollapsingHeader::new(
-                RichText::new(folder_display).color(ui.visuals().text_color())
-            )
-            .id_salt(format!("folder_{}", folder_key))
-            .default_open(was_expanded)
-            .show(ui, |ui| {
-                let mut sorted_children: Vec<_> = node.children.values().collect();
-                sorted_children.sort_by(|a, b| {
-                    match (a.is_file, b.is_file) {
-                        (true, false) => std::cmp::Ordering::Greater,
-                        (false, true) => std::cmp::Ordering::Less,
-                        _ => a.name.cmp(&b.name),
-                    }
-                });
-
-                let new_indent = format!("{}  ", indent);
-                for child in sorted_children {
-                    render_tree_node(ui, state, child, &new_indent, modified_files);
-                }
-            })
-        } else {
-            CollapsingHeader::new(format!("{}📂 {}", indent, node.name))
-                .id_salt(format!("folder_{}", folder_key))
-                .default_open(was_expanded)
-                .show(ui, |ui| {
-                    let mut sorted_children: Vec<_> = node.children.values().collect();
-                    sorted_children.sort_by(|a, b| {
-                        match (a.is_file, b.is_file) {
-                            (true, false) => std::cmp::Ordering::Greater,
-                            (false, true) => std::cmp::Ordering::Less,
-                            _ => a.name.cmp(&b.name),
-                        }
-                    });
-
-                    let new_indent = format!("{}  ", indent);
-                    for child in sorted_children {
-                        render_tree_node(ui, state, child, &new_indent, modified_files);
-                    }
-                })
-        };
-
-        // Update state when header is clicked
-        if header_response.header_response.clicked() {
-            if was_expanded {
-                state.expanded_folders.remove(&folder_key);
-            } else {
-                state.expanded_folders.insert(folder_key);
-            }
-        }
-    }
-}

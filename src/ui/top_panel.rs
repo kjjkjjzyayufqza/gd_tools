@@ -43,6 +43,8 @@ fn scan_directory(state: &mut AppState, path: &Path) {
     state.loaded_files.clear();
     state.initial_file_timestamps.clear();
     state.modified_files.clear();
+    state.bump_modified_files_version();
+    state.invalidate_tree_cache();
     
     for entry in WalkDir::new(path).into_iter().filter_map(|e| e.ok()) {
         if entry.file_type().is_file() {
@@ -143,6 +145,8 @@ pub fn process_file_events(ctx: &egui::Context, state: &mut AppState) {
 
     // Process modified files - check if timestamp changed from initial
     if !modified_paths.is_empty() {
+        let mut files_to_mark_modified: Vec<PathBuf> = Vec::new();
+        
         if let Some(root) = &state.current_root_dir {
             for abs_path in modified_paths {
                 if let Ok(relative) = abs_path.strip_prefix(root) {
@@ -155,14 +159,22 @@ pub fn process_file_events(ctx: &egui::Context, state: &mut AppState) {
                             if let Ok(current_time) = metadata.modified() {
                                 // Compare timestamps - if different, mark as modified
                                 if current_time != *initial_time {
-                                    state.modified_files.insert(relative_buf);
-                                    ctx.request_repaint();
+                                    files_to_mark_modified.push(relative_buf);
                                 }
                             }
                         }
                     }
                 }
             }
+        }
+        
+        // Apply modifications outside of the borrow
+        if !files_to_mark_modified.is_empty() {
+            for file in files_to_mark_modified {
+                state.modified_files.insert(file);
+            }
+            state.bump_modified_files_version();
+            ctx.request_repaint();
         }
     }
 
@@ -215,6 +227,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) -> Option<CompletionStatu
     if done_packing {
         state.pack_status_receiver = None;
         state.modified_files.clear();
+        state.bump_modified_files_version();
     }
 
     // Process extraction status updates

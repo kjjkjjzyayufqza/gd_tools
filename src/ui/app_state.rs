@@ -1,9 +1,34 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::time::SystemTime;
+use std::collections::{HashMap, HashSet};
 use egui_notify::{Toasts, Anchor};
 use egui;
 use flate2;
+
+/// Optimized tree node for file tree rendering
+#[derive(Debug, Clone)]
+pub struct CachedTreeNode {
+    pub name: String,
+    pub full_path: String,
+    pub children: Vec<CachedTreeNode>,
+    pub is_file: bool,
+    /// Cached count of total files in this subtree (for display)
+    pub file_count: usize,
+}
+
+/// Flattened tree item for virtual scrolling
+#[derive(Debug, Clone)]
+pub struct FlatTreeItem {
+    pub name: String,
+    pub full_path: String,
+    pub is_file: bool,
+    pub depth: usize,
+    /// For folders: number of children that would be visible if expanded
+    pub child_count: usize,
+    /// Whether this item has children (for folder expand arrow)
+    pub has_children: bool,
+}
 // use std::sync::{Arc, Mutex}; // Unused for now
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
@@ -125,14 +150,36 @@ pub struct AppState {
 
     // File modification tracking - stores initial timestamps when folder is opened
     #[serde(skip)]
-    pub initial_file_timestamps: std::collections::HashMap<PathBuf, SystemTime>,
+    pub initial_file_timestamps: HashMap<PathBuf, SystemTime>,
     // Files that have been modified since folder was opened (relative paths)
     #[serde(skip)]
-    pub modified_files: std::collections::HashSet<PathBuf>,
+    pub modified_files: HashSet<PathBuf>,
 
     // Notification system
     #[serde(skip)]
     pub toasts: Toasts,
+
+    // Cached file tree for performance optimization
+    #[serde(skip)]
+    pub cached_tree: Option<CachedTreeNode>,
+    /// Hash of loaded_files to detect changes
+    #[serde(skip)]
+    pub loaded_files_hash: u64,
+    /// Cached flat list for virtual scrolling (only visible items)
+    #[serde(skip)]
+    pub flat_tree_cache: Vec<FlatTreeItem>,
+    /// Hash to detect if flat tree needs rebuild
+    #[serde(skip)]
+    pub flat_tree_hash: u64,
+    /// Cached set of folders with modified children
+    #[serde(skip)]
+    pub folders_with_modified: HashSet<String>,
+    /// Version counter for modified_files to detect changes
+    #[serde(skip)]
+    pub modified_files_version: u64,
+    /// Last version of modified_files used to compute folders_with_modified
+    #[serde(skip)]
+    pub folders_with_modified_version: u64,
 }
 
 impl Default for AppState {
@@ -172,11 +219,67 @@ impl Default for AppState {
             search_query: String::new(),
             file_watcher: None,
             file_events_receiver: None,
-            initial_file_timestamps: std::collections::HashMap::new(),
-            modified_files: std::collections::HashSet::new(),
+            initial_file_timestamps: HashMap::new(),
+            modified_files: HashSet::new(),
             toasts: Toasts::default()
                 .with_anchor(Anchor::TopRight)
                 .with_margin(egui::vec2(10.0, 40.0)),
+            cached_tree: None,
+            loaded_files_hash: 0,
+            flat_tree_cache: Vec::new(),
+            flat_tree_hash: 0,
+            folders_with_modified: HashSet::new(),
+            modified_files_version: 0,
+            folders_with_modified_version: 0,
         }
+    }
+}
+
+impl AppState {
+    /// Mark that modified_files has changed
+    pub fn bump_modified_files_version(&mut self) {
+        self.modified_files_version = self.modified_files_version.wrapping_add(1);
+    }
+}
+
+impl AppState {
+    /// Invalidate the tree cache (call when files are loaded/changed)
+    pub fn invalidate_tree_cache(&mut self) {
+        self.cached_tree = None;
+        self.flat_tree_cache.clear();
+        self.flat_tree_hash = 0;
+        self.folders_with_modified.clear();
+    }
+
+    /// Compute a simple hash of loaded files for change detection
+    pub fn compute_files_hash(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        use std::collections::hash_map::DefaultHasher;
+        let mut hasher = DefaultHasher::new();
+        self.loaded_files.len().hash(&mut hasher);
+        // Only hash first and last few paths for performance
+        for path in self.loaded_files.iter().take(10) {
+            path.hash(&mut hasher);
+        }
+        if self.loaded_files.len() > 20 {
+            for path in self.loaded_files.iter().skip(self.loaded_files.len() - 10) {
+                path.hash(&mut hasher);
+            }
+        }
+        hasher.finish()
+    }
+
+    /// Compute hash for flat tree cache invalidation
+    pub fn compute_flat_tree_hash(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        use std::collections::hash_map::DefaultHasher;
+        let mut hasher = DefaultHasher::new();
+        self.loaded_files_hash.hash(&mut hasher);
+        self.expanded_folders.len().hash(&mut hasher);
+        for folder in &self.expanded_folders {
+            folder.hash(&mut hasher);
+        }
+        self.search_query.hash(&mut hasher);
+        hasher.finish()
     }
 }
