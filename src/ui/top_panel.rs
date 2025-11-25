@@ -8,10 +8,20 @@ use notify::{Watcher, RecursiveMode, Config};
 /// Scans a directory and updates the loaded files list
 fn scan_directory(state: &mut AppState, path: &Path) {
     state.loaded_files.clear();
+    state.initial_file_timestamps.clear();
+    state.modified_files.clear();
+    
     for entry in WalkDir::new(path).into_iter().filter_map(|e| e.ok()) {
         if entry.file_type().is_file() {
             if let Ok(relative) = entry.path().strip_prefix(path) {
                 state.loaded_files.push(relative.to_path_buf());
+                
+                // Record initial modification time
+                if let Ok(metadata) = entry.metadata() {
+                    if let Ok(modified) = metadata.modified() {
+                        state.initial_file_timestamps.insert(relative.to_path_buf(), modified);
+                    }
+                }
             }
         }
     }
@@ -60,6 +70,7 @@ fn start_file_watcher(state: &mut AppState, path: &Path) {
 pub fn process_file_events(ctx: &egui::Context, state: &mut AppState) {
     let mut needs_refresh = false;
     let mut error_message = None;
+    let mut modified_paths: Vec<std::path::PathBuf> = Vec::new();
 
     // Collect events first to avoid borrowing issues
     if let Some(rx) = &state.file_events_receiver {
@@ -72,6 +83,15 @@ pub fn process_file_events(ctx: &egui::Context, state: &mut AppState) {
                         | notify::EventKind::Remove(_)
                         | notify::EventKind::Modify(notify::event::ModifyKind::Name(_)) => {
                             needs_refresh = true;
+                        }
+                        // Handle content modification events
+                        notify::EventKind::Modify(notify::event::ModifyKind::Data(_))
+                        | notify::EventKind::Modify(notify::event::ModifyKind::Any)
+                        | notify::EventKind::Modify(notify::event::ModifyKind::Metadata(_)) => {
+                            // Record modified file paths
+                            for path in event.paths {
+                                modified_paths.push(path);
+                            }
                         }
                         _ => {}
                     }
@@ -86,6 +106,31 @@ pub fn process_file_events(ctx: &egui::Context, state: &mut AppState) {
     // Update error message if any
     if let Some(err) = error_message {
         state.status_message = err;
+    }
+
+    // Process modified files - check if timestamp changed from initial
+    if !modified_paths.is_empty() {
+        if let Some(root) = &state.current_root_dir {
+            for abs_path in modified_paths {
+                if let Ok(relative) = abs_path.strip_prefix(root) {
+                    let relative_buf = relative.to_path_buf();
+                    
+                    // Check if this file exists in our initial timestamps
+                    if let Some(initial_time) = state.initial_file_timestamps.get(&relative_buf) {
+                        // Get current modification time
+                        if let Ok(metadata) = std::fs::metadata(&abs_path) {
+                            if let Ok(current_time) = metadata.modified() {
+                                // Compare timestamps - if different, mark as modified
+                                if current_time != *initial_time {
+                                    state.modified_files.insert(relative_buf);
+                                    ctx.request_repaint();
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // Refresh file list if needed

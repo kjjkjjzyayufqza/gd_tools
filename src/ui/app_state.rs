@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::time::SystemTime;
 use egui_notify::{Toasts, Anchor};
 use egui;
 // use std::sync::{Arc, Mutex}; // Unused for now
@@ -64,6 +65,13 @@ pub struct AppState {
     #[serde(skip)]
     pub file_events_receiver: Option<crossbeam_channel::Receiver<notify::Result<notify::Event>>>,
 
+    // File modification tracking - stores initial timestamps when folder is opened
+    #[serde(skip)]
+    pub initial_file_timestamps: std::collections::HashMap<PathBuf, SystemTime>,
+    // Files that have been modified since folder was opened (relative paths)
+    #[serde(skip)]
+    pub modified_files: std::collections::HashSet<PathBuf>,
+
     // Notification system
     #[serde(skip)]
     pub toasts: Toasts,
@@ -92,6 +100,8 @@ impl Default for AppState {
             search_query: String::new(),
             file_watcher: None,
             file_events_receiver: None,
+            initial_file_timestamps: std::collections::HashMap::new(),
+            modified_files: std::collections::HashSet::new(),
             toasts: Toasts::default()
                 .with_anchor(Anchor::TopRight)
                 .with_margin(egui::vec2(10.0, 40.0)),

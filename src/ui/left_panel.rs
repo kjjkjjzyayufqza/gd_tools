@@ -1,6 +1,6 @@
 use super::app_state::AppState;
-use egui::{CollapsingHeader, ScrollArea, SidePanel, TextEdit};
-use std::collections::HashMap;
+use egui::{CollapsingHeader, ScrollArea, SidePanel, TextEdit, Color32, RichText};
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 pub fn show(ctx: &egui::Context, state: &mut AppState) {
@@ -55,7 +55,9 @@ fn render_file_list(ui: &mut egui::Ui, state: &mut AppState) {
                 }
 
                 let tree = build_file_tree(&state.loaded_files);
-                render_tree_node(ui, state, &tree, "");
+                // Clone modified_files to avoid borrow issues
+                let modified_files = state.modified_files.clone();
+                render_tree_node(ui, state, &tree, "", &modified_files);
             }
         });
 }
@@ -149,11 +151,37 @@ fn has_matching_children(node: &TreeNode, search_query: &str) -> bool {
     false
 }
 
+/// Check if a node or any of its children have been modified
+fn has_modified_children(node: &TreeNode, modified_files: &HashSet<PathBuf>) -> bool {
+    if node.is_file {
+        let path = PathBuf::from(&node.full_path);
+        return modified_files.contains(&path);
+    }
+    
+    for child in node.children.values() {
+        if has_modified_children(child, modified_files) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Check if a specific file path is modified
+fn is_file_modified(full_path: &str, modified_files: &HashSet<PathBuf>) -> bool {
+    let path = PathBuf::from(full_path);
+    modified_files.contains(&path)
+}
+
+// Modified indicator - yellow/orange dot like VS Code
+const MODIFIED_INDICATOR: &str = " ●";
+const MODIFIED_COLOR: Color32 = Color32::from_rgb(255, 193, 7); // Amber/Orange yellow
+
 fn render_tree_node(
     ui: &mut egui::Ui,
     state: &mut AppState,
     node: &TreeNode,
     indent: &str,
+    modified_files: &HashSet<PathBuf>,
 ) {
     let search_query = state.search_query.trim();
     let should_show = matches_search(node, search_query) || has_matching_children(node, search_query);
@@ -170,7 +198,7 @@ fn render_tree_node(
         });
 
         for child in sorted_children {
-            render_tree_node(ui, state, child, indent);
+            render_tree_node(ui, state, child, indent, modified_files);
         }
         return;
     }
@@ -180,34 +208,61 @@ fn render_tree_node(
     }
 
     if node.is_file {
-        // Render file
-        let display_name = format!("{}📄 {}", indent, node.name);
+        // Check if this file is modified
+        let is_modified = is_file_modified(&node.full_path, modified_files);
         let is_selected = state
             .selected_file
             .as_deref()
             .map(|s| s == node.full_path)
             .unwrap_or(false);
 
-        let response = ui
-            .selectable_label(is_selected, display_name)
-            .on_hover_text(&node.full_path);
+        // Render file with optional modified indicator
+        ui.horizontal(|ui| {
+            let display_name = format!("{}📄 {}", indent, node.name);
+            let response = ui
+                .selectable_label(is_selected, display_name)
+                .on_hover_text(if is_modified {
+                    format!("{} (Modified)", &node.full_path)
+                } else {
+                    node.full_path.clone()
+                });
 
-        if response.clicked() {
-            state.selected_file = Some(node.full_path.clone());
-        }
+            if response.clicked() {
+                state.selected_file = Some(node.full_path.clone());
+            }
+
+            // Show modified indicator dot after the file name
+            if is_modified {
+                ui.label(RichText::new(MODIFIED_INDICATOR).color(MODIFIED_COLOR).strong());
+            }
+        });
     } else {
         // Render folder
         let folder_key = node.full_path.clone();
         let has_matches = has_matching_children(node, search_query);
         let should_expand = has_matches && !search_query.is_empty();
         let was_expanded = state.expanded_folders.contains(&folder_key) || should_expand;
+        
+        // Check if this folder has any modified children
+        let has_modified = has_modified_children(node, modified_files);
 
         // Auto-expand folders containing matches when searching
         if should_expand && !state.expanded_folders.contains(&folder_key) {
             state.expanded_folders.insert(folder_key.clone());
         }
 
-        let header_response = CollapsingHeader::new(format!("{}📂 {}", indent, node.name))
+        // Build folder display name with optional modified indicator
+        let folder_display = if has_modified {
+            format!("{}📂 {}{}", indent, node.name, MODIFIED_INDICATOR)
+        } else {
+            format!("{}📂 {}", indent, node.name)
+        };
+
+        // Create header with custom text coloring for modified indicator
+        let header_response = if has_modified {
+            CollapsingHeader::new(
+                RichText::new(folder_display).color(ui.visuals().text_color())
+            )
             .id_salt(format!("folder_{}", folder_key))
             .default_open(was_expanded)
             .show(ui, |ui| {
@@ -222,9 +277,29 @@ fn render_tree_node(
 
                 let new_indent = format!("{}  ", indent);
                 for child in sorted_children {
-                    render_tree_node(ui, state, child, &new_indent);
+                    render_tree_node(ui, state, child, &new_indent, modified_files);
                 }
-            });
+            })
+        } else {
+            CollapsingHeader::new(format!("{}📂 {}", indent, node.name))
+                .id_salt(format!("folder_{}", folder_key))
+                .default_open(was_expanded)
+                .show(ui, |ui| {
+                    let mut sorted_children: Vec<_> = node.children.values().collect();
+                    sorted_children.sort_by(|a, b| {
+                        match (a.is_file, b.is_file) {
+                            (true, false) => std::cmp::Ordering::Greater,
+                            (false, true) => std::cmp::Ordering::Less,
+                            _ => a.name.cmp(&b.name),
+                        }
+                    });
+
+                    let new_indent = format!("{}  ", indent);
+                    for child in sorted_children {
+                        render_tree_node(ui, state, child, &new_indent, modified_files);
+                    }
+                })
+        };
 
         // Update state when header is clicked
         if header_response.header_response.clicked() {
