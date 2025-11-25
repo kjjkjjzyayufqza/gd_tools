@@ -181,6 +181,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) -> Option<CompletionStatu
 
     if done_packing {
         state.pack_status_receiver = None;
+        state.modified_files.clear();
     }
 
     // Process extraction status updates
@@ -275,6 +276,19 @@ fn render_left_menu(ui: &mut Ui, state: &mut AppState) {
         ui.separator();
         if ui.button("Pack Folder...").clicked() {
             if let Some(root) = &state.current_root_dir {
+                // Check for incremental packing
+                let packing_mode = if state.packing_mode == crate::ui::app_state::PackingMode::Incremental {
+                    if state.modified_files.is_empty() {
+                        state.toasts.warning("No modified files detected for incremental packing.");
+                        state.status_message = "Incremental packing skipped: no changes.".to_string();
+                        ui.close();
+                        return;
+                    }
+                    crate::psarc::PackingMode::Incremental
+                } else {
+                    crate::psarc::PackingMode::Full
+                };
+
                 if let Some(output) = FileDialog::new()
                     .add_filter("PSARC Archive", &["psarc"])
                     .save_file()
@@ -285,11 +299,26 @@ fn render_left_menu(ui: &mut Ui, state: &mut AppState) {
                     state.is_packing = true;
 
                     let root_clone = root.clone();
+                    let compression = state.compression_level.to_flate2();
+                    let modified_files = state.modified_files.clone();
+                    let existing_psarc = if packing_mode == crate::psarc::PackingMode::Incremental {
+                        Some(output.clone())
+                    } else {
+                        None
+                    };
 
                     // Call the PSARC module
-                    let _ = crate::psarc::pack_directory(&root_clone, &output, move |status| {
-                        let _ = tx.send(status);
-                    });
+                    let _ = crate::psarc::pack_directory(
+                        &root_clone,
+                        &output,
+                        compression,
+                        packing_mode,
+                        modified_files,
+                        existing_psarc,
+                        move |status| {
+                            let _ = tx.send(status);
+                        },
+                    );
                 } else {
                     state.status_message = "No output file selected!".to_string();
                 }
@@ -395,6 +424,7 @@ fn render_left_menu(ui: &mut Ui, state: &mut AppState) {
         }
         if ui.button("Settings").clicked() {
             state.status_message = "Opening Settings...".to_owned();
+            state.show_settings = true;
             ui.close();
         }
     });
@@ -412,9 +442,28 @@ fn render_left_menu(ui: &mut Ui, state: &mut AppState) {
 }
 
 fn render_right_toolbar(ui: &mut Ui, state: &mut AppState) {
+    // Display current packing mode before the Pack PSARC button
+    let mode_text = match state.packing_mode {
+        crate::ui::app_state::PackingMode::Full => "Full",
+        crate::ui::app_state::PackingMode::Incremental => "Incremental",
+    };
+    ui.label(format!("Mode: {}", mode_text));
+
     // Pack PSARC button - placed before Status label (right side in RTL layout)
     if ui.button("Pack PSARC").clicked() {
         if let Some(root) = &state.current_root_dir {
+            // Check for incremental packing
+            let packing_mode = if state.packing_mode == crate::ui::app_state::PackingMode::Incremental {
+                if state.modified_files.is_empty() {
+                    state.toasts.warning("No modified files detected for incremental packing.");
+                    state.status_message = "Incremental packing skipped: no changes.".to_string();
+                    return;
+                }
+                crate::psarc::PackingMode::Incremental
+            } else {
+                crate::psarc::PackingMode::Full
+            };
+
             if let Some(output) = FileDialog::new()
                 .add_filter("PSARC Archive", &["psarc"])
                 .save_file()
@@ -425,11 +474,26 @@ fn render_right_toolbar(ui: &mut Ui, state: &mut AppState) {
                 state.is_packing = true;
 
                 let root_clone = root.clone();
+                let compression = state.compression_level.to_flate2();
+                let modified_files = state.modified_files.clone();
+                let existing_psarc = if packing_mode == crate::psarc::PackingMode::Incremental {
+                    Some(output.clone())
+                } else {
+                    None
+                };
 
                 // Call the PSARC module
-                let _ = crate::psarc::pack_directory(&root_clone, &output, move |status| {
-                    let _ = tx.send(status);
-                });
+                let _ = crate::psarc::pack_directory(
+                    &root_clone,
+                    &output,
+                    compression,
+                    packing_mode,
+                    modified_files,
+                    existing_psarc,
+                    move |status| {
+                        let _ = tx.send(status);
+                    },
+                );
             } else {
                 state.status_message = "No output file selected!".to_string();
             }

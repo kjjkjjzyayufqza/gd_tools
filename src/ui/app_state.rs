@@ -3,7 +3,35 @@ use std::path::PathBuf;
 use std::time::SystemTime;
 use egui_notify::{Toasts, Anchor};
 use egui;
+use flate2;
 // use std::sync::{Arc, Mutex}; // Unused for now
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
+pub enum CompressionLevel {
+    None,
+    Fast,
+    #[default]
+    Best,
+    Default,
+}
+
+impl CompressionLevel {
+    pub fn to_flate2(&self) -> flate2::Compression {
+        match self {
+            CompressionLevel::None => flate2::Compression::none(),
+            CompressionLevel::Fast => flate2::Compression::fast(),
+            CompressionLevel::Default => flate2::Compression::default(),
+            CompressionLevel::Best => flate2::Compression::best(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
+pub enum PackingMode {
+    #[default]
+    Full,        // Repack everything
+    Incremental, // Only modified files
+}
 
 /// Application state that can be persisted and shared across components.
 #[derive(Deserialize, Serialize)]
@@ -21,6 +49,12 @@ pub struct AppState {
     pub right_panel_width: Option<f32>,
     /// Layout version for forcing panel recreation on reset
     pub layout_version: u32,
+
+    // Settings
+    pub compression_level: CompressionLevel,
+    pub packing_mode: PackingMode,
+    #[serde(skip)]
+    pub show_settings: bool,
 
     // Runtime-only state (skipped during serialization)
     #[serde(skip)]
@@ -86,6 +120,9 @@ impl Default for AppState {
             left_panel_width: None,
             right_panel_width: None,
             layout_version: 0,
+            compression_level: CompressionLevel::Best,
+            packing_mode: PackingMode::Full,
+            show_settings: false,
             selected_file: None,
             status_message: "Ready".to_owned(),
             current_root_dir: None,

@@ -5,7 +5,7 @@ use flate2::write::ZlibEncoder;
 use md5::{Digest, Md5};
 use memmap2::Mmap;
 use rayon::prelude::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{self, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -14,6 +14,13 @@ use std::time::Instant;
 use walkdir::WalkDir;
 
 const BLOCK_SIZE: usize = 65536; // 64KB
+
+/// Packing mode for PSARC creation
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PackingMode {
+    Full,        // Repack everything from scratch
+    Incremental, // Only recompress modified files, reuse cached data for unchanged files
+}
 
 #[derive(Debug, Clone)]
 pub struct PackingStatus {
@@ -62,6 +69,10 @@ struct ProcessedFile {
 pub fn pack_directory<F>(
     root_path: &Path,
     output_path: &Path,
+    compression: Compression,
+    packing_mode: PackingMode,
+    modified_files: HashSet<PathBuf>,
+    existing_psarc: Option<PathBuf>,
     progress_callback: F,
 ) -> io::Result<()>
 where
@@ -70,15 +81,27 @@ where
     let root_path = root_path.to_path_buf();
     let output_path = output_path.to_path_buf();
     let start_time = Instant::now();
+    let mode_str = match packing_mode {
+        PackingMode::Full => "Full",
+        PackingMode::Incremental => "Incremental",
+    };
 
     // Run in a separate thread to avoid blocking UI
     thread::spawn(move || {
-        let result = pack_directory_internal(&root_path, &output_path, &progress_callback);
+        let result = pack_directory_internal(
+            &root_path,
+            &output_path,
+            compression,
+            packing_mode,
+            &modified_files,
+            existing_psarc.as_deref(),
+            &progress_callback,
+        );
         let elapsed_ms = start_time.elapsed().as_millis();
 
         match result {
             Err(e) => {
-                eprintln!("[PSARC] Packing failed after {} ms: {}", elapsed_ms, e);
+                eprintln!("[PSARC] Packing failed (mode: {}) after {} ms: {}", mode_str, elapsed_ms, e);
                 progress_callback(PackingStatus {
                     current_file: "Error".to_string(),
                     progress: 0.0,
@@ -86,8 +109,11 @@ where
                     error: Some(e.to_string()),
                 });
             }
-            Ok(()) => {
-                eprintln!("[PSARC] Packing completed successfully in {} ms", elapsed_ms);
+            Ok((recompressed, reused)) => {
+                eprintln!(
+                    "[PSARC] Packing completed (mode: {}) in {} ms - {} files recompressed, {} files reused from cache",
+                    mode_str, elapsed_ms, recompressed, reused
+                );
                 progress_callback(PackingStatus {
                     current_file: "Done".to_string(),
                     progress: 1.0,
@@ -101,11 +127,153 @@ where
     Ok(())
 }
 
+/// Cached file data from an existing PSARC for incremental packing
+struct CachedFileData {
+    compressed_data: Vec<u8>,
+    zsizes: Vec<ZSize>,
+    uncompressed_size: u64,
+}
+
+/// Read cached compressed data for a specific entry from an existing PSARC
+fn read_cached_file_data(
+    mmap: &Mmap,
+    entry: &Entry,
+    zsizes: &[u16],
+    block_size: usize,
+) -> io::Result<CachedFileData> {
+    let mut result_data = Vec::new();
+    let mut result_zsizes = Vec::new();
+    let mut current_zsize_index = entry.zsize_index as usize;
+    let mut current_offset = entry.offset as usize;
+    let mut remaining = entry.uncompressed_size as usize;
+
+    while remaining > 0 {
+        let zsize = zsizes.get(current_zsize_index)
+            .ok_or_else(|| io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("Invalid zsize index {} (max: {})", current_zsize_index, zsizes.len()),
+            ))?;
+
+        let compressed_size = if *zsize == 0 {
+            block_size
+        } else {
+            *zsize as usize
+        };
+
+        if current_offset + compressed_size > mmap.len() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "Block read would exceed file bounds: offset {}, size {}, file size {}",
+                    current_offset, compressed_size, mmap.len()
+                ),
+            ));
+        }
+
+        // Copy raw compressed data (don't decompress!)
+        result_data.extend_from_slice(&mmap[current_offset..current_offset + compressed_size]);
+        result_zsizes.push(ZSize { size: *zsize });
+
+        current_offset += compressed_size;
+        remaining = remaining.saturating_sub(block_size);
+        current_zsize_index += 1;
+    }
+
+    Ok(CachedFileData {
+        compressed_data: result_data,
+        zsizes: result_zsizes,
+        uncompressed_size: entry.uncompressed_size,
+    })
+}
+
+/// Load cache from existing PSARC file for incremental packing
+fn load_psarc_cache(psarc_path: &Path) -> io::Result<HashMap<[u8; 16], CachedFileData>> {
+    let file = File::open(psarc_path)?;
+    #[allow(unsafe_code)]
+    let mmap = unsafe { Mmap::map(&file)? };
+    let mut reader = io::Cursor::new(&mmap[..]);
+
+    // Read header
+    let mut magic = [0u8; 4];
+    reader.read_exact(&mut magic)?;
+    if &magic != b"PSAR" {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Invalid PSARC magic number",
+        ));
+    }
+
+    let _major = reader.read_u16::<BigEndian>()?;
+    let _minor = reader.read_u16::<BigEndian>()?;
+    let mut compression = [0u8; 4];
+    reader.read_exact(&mut compression)?;
+    
+    let toc_length = reader.read_u32::<BigEndian>()?;
+    let _entry_size = reader.read_u32::<BigEndian>()?;
+    let file_count = reader.read_u32::<BigEndian>()?;
+    let block_size = reader.read_u32::<BigEndian>()?;
+    let _flags = reader.read_u32::<BigEndian>()?;
+
+    // Read TOC entries
+    let mut entries: Vec<Entry> = Vec::with_capacity(file_count as usize);
+    for _ in 0..file_count {
+        let mut name_hash = [0u8; 16];
+        reader.read_exact(&mut name_hash)?;
+        let zsize_index = reader.read_u32::<BigEndian>()?;
+
+        let uncompressed_size_high = reader.read_u8()?;
+        let uncompressed_size_low = reader.read_u32::<BigEndian>()?;
+        let uncompressed_size = ((uncompressed_size_high as u64) << 32) | (uncompressed_size_low as u64);
+
+        let offset_high = reader.read_u8()?;
+        let offset_low = reader.read_u32::<BigEndian>()?;
+        let offset = ((offset_high as u64) << 32) | (offset_low as u64);
+
+        entries.push(Entry {
+            name_hash,
+            zsize_index,
+            uncompressed_size,
+            offset,
+        });
+    }
+
+    // Read ZSizes table
+    let zsizes_start = reader.position() as usize;
+    let zsizes_count = (toc_length as usize - 32 - (file_count as usize * 30)) / 2;
+    let zsizes: Vec<u16> = (0..zsizes_count)
+        .map(|i| {
+            let pos = zsizes_start + (i * 2);
+            u16::from_be_bytes([mmap[pos], mmap[pos + 1]])
+        })
+        .collect();
+
+    // Build cache map
+    let mut cache = HashMap::new();
+    for entry in &entries {
+        // Skip manifest entry (all zeros hash)
+        if entry.name_hash == [0; 16] {
+            continue;
+        }
+        
+        if let Ok(cached_data) = read_cached_file_data(&mmap, entry, &zsizes, block_size as usize) {
+            cache.insert(entry.name_hash, cached_data);
+        }
+    }
+
+    eprintln!("[PSARC] Loaded cache with {} entries from existing archive", cache.len());
+    Ok(cache)
+}
+
+/// Returns (recompressed_count, reused_count)
 fn pack_directory_internal<F>(
     root_path: &Path,
     output_path: &Path,
+    compression: Compression,
+    packing_mode: PackingMode,
+    modified_files: &HashSet<PathBuf>,
+    existing_psarc: Option<&Path>,
     progress_callback: &F,
-) -> io::Result<()>
+) -> io::Result<(usize, usize)>
 where
     F: Fn(PackingStatus),
 {
@@ -159,6 +327,31 @@ where
         .map(|(_, psarc_path)| calculate_md5(psarc_path))
         .collect();
 
+    // Load cache from existing PSARC if in incremental mode
+    let cache: HashMap<[u8; 16], CachedFileData> = if packing_mode == PackingMode::Incremental {
+        if let Some(psarc_path) = existing_psarc {
+            if psarc_path.exists() {
+                progress_callback(PackingStatus {
+                    current_file: "Loading cache from existing PSARC...".to_string(),
+                    progress: 0.0,
+                    is_packing: true,
+                    error: None,
+                });
+                load_psarc_cache(psarc_path).unwrap_or_else(|e| {
+                    eprintln!("[PSARC] Warning: Failed to load cache: {}", e);
+                    HashMap::new()
+                })
+            } else {
+                eprintln!("[PSARC] No existing PSARC found, will compress all files");
+                HashMap::new()
+            }
+        } else {
+            HashMap::new()
+        }
+    } else {
+        HashMap::new()
+    };
+
     // Create temp file for compressed data
     let mut temp_data_file = tempfile::tempfile()?;
     let total_files = files.len() + 1; // +1 for FileList.xml
@@ -175,7 +368,7 @@ where
     // Use larger buffer for better I/O performance (1MB instead of default 8KB)
     let mut writer = BufWriter::with_capacity(1024 * 1024, &mut temp_data_file);
 
-    // 1. Process FileList.xml
+    // 1. Process FileList.xml (always recompress)
     {
         let uncompressed_size = filelist_bytes.len() as u64;
         let zsize_start_index = zsizes.len() as u32;
@@ -186,7 +379,7 @@ where
         // Parallel Compress
         let compressed_chunks: Vec<Vec<u8>> = chunks
             .par_iter()
-            .map(|chunk| compress_block(chunk))
+            .map(|chunk| compress_block(chunk, compression))
             .collect();
 
         for (i, compressed) in compressed_chunks.iter().enumerate() {
@@ -215,16 +408,49 @@ where
         });
     }
 
-    // 2. Process Real Files in Parallel
+    // 2. Process Real Files
     let total_files_count = files.len();
     
-    // Process files in parallel, but collect results to maintain order
-    // Note: We can't call progress_callback in parallel context, so we'll update after collection
+    // Convert modified_files to a set of normalized paths for comparison
+    let modified_set: HashSet<String> = modified_files
+        .iter()
+        .map(|p| p.to_string_lossy().replace('\\', "/"))
+        .collect();
+
+    // Track statistics
+    let mut recompressed_count = 0usize;
+    let mut reused_count = 0usize;
+    
+    // Process files - determine which need recompression vs cache reuse
     let processed_files: Result<Vec<ProcessedFile>, io::Error> = files
         .par_iter()
         .enumerate()
-        .map(|(file_idx, (sys_path, _psarc_path))| {
+        .map(|(file_idx, (sys_path, psarc_path))| {
+            let name_hash = file_hashes[file_idx];
+            
+            // Check if this file should use cached data
+            let should_recompress = packing_mode == PackingMode::Full 
+                || modified_set.contains(psarc_path)
+                || !cache.contains_key(&name_hash);
 
+            if !should_recompress {
+                // Use cached data
+                if let Some(cached) = cache.get(&name_hash) {
+                    return Ok(ProcessedFile {
+                        file_idx,
+                        compressed_data: cached.compressed_data.clone(),
+                        zsizes: cached.zsizes.clone(),
+                        entry: Entry {
+                            name_hash,
+                            zsize_index: 0, // Will be set later
+                            uncompressed_size: cached.uncompressed_size,
+                            offset: 0, // Will be set later
+                        },
+                    });
+                }
+            }
+
+            // Need to recompress this file
             let file = File::open(sys_path)?;
             let len = file.metadata()?.len();
 
@@ -234,7 +460,7 @@ where
                     compressed_data: Vec::new(),
                     zsizes: Vec::new(),
                     entry: Entry {
-                        name_hash: file_hashes[file_idx],
+                        name_hash,
                         zsize_index: 0, // Will be set later
                         uncompressed_size: 0,
                         offset: 0, // Will be set later
@@ -251,7 +477,7 @@ where
             // Parallel Compress blocks
             let compressed_chunks: Vec<Vec<u8>> = chunks
                 .par_iter()
-                .map(|chunk| compress_block(chunk))
+                .map(|chunk| compress_block(chunk, compression))
                 .collect();
 
             let mut file_zsizes = Vec::new();
@@ -290,7 +516,7 @@ where
                 compressed_data: file_data,
                 zsizes: file_zsizes,
                 entry: Entry {
-                    name_hash: file_hashes[file_idx],
+                    name_hash,
                     zsize_index: 0, // Will be set later
                     uncompressed_size: len,
                     offset: 0, // Will be set later
@@ -307,16 +533,29 @@ where
     // Write processed files in order and build entries/zsizes
     let progress_update_interval = (total_files_count / 100).max(1).min(10);
     for (idx, processed) in processed_files.into_iter().enumerate() {
+        let psarc_path = &files[processed.file_idx].1;
+        let name_hash = processed.entry.name_hash;
+        
+        // Track if this file was reused from cache
+        let was_reused = packing_mode == PackingMode::Incremental 
+            && !modified_set.contains(psarc_path)
+            && cache.contains_key(&name_hash);
+        
+        if was_reused {
+            reused_count += 1;
+        } else {
+            recompressed_count += 1;
+        }
+
         // Update progress during sequential write phase
         if idx % progress_update_interval == 0 || idx == total_files_count - 1 {
-            if let Some((_, psarc_path)) = files.get(processed.file_idx) {
-                progress_callback(PackingStatus {
-                    current_file: psarc_path.clone(),
-                    progress: (idx as f32) / (total_files_count as f32),
-                    is_packing: true,
-                    error: None,
-                });
-            }
+            let status = if was_reused { "cached" } else { "compressing" };
+            progress_callback(PackingStatus {
+                current_file: format!("[{}] {}", status, psarc_path),
+                progress: (idx as f32) / (total_files_count as f32),
+                is_packing: true,
+                error: None,
+            });
         }
         let zsize_start_index = zsizes.len() as u32;
         let start_offset = current_offset;
@@ -404,7 +643,7 @@ where
 
     output.flush()?;
 
-    Ok(())
+    Ok((recompressed_count, reused_count))
 }
 
 fn resolve_file_order(
@@ -492,10 +731,10 @@ fn manifest_bytes_from_paths(paths: &[String]) -> Vec<u8> {
     bytes
 }
 
-fn compress_block(data: &[u8]) -> Vec<u8> {
+fn compress_block(data: &[u8], compression: Compression) -> Vec<u8> {
     // Use default compression level for better speed/ratio balance
     // best() is too slow, default() provides good compression with better speed
-    let mut encoder = ZlibEncoder::new(Vec::with_capacity(data.len()), Compression::best());
+    let mut encoder = ZlibEncoder::new(Vec::with_capacity(data.len()), compression);
     encoder.write_all(data).unwrap();
     encoder.finish().unwrap()
 }

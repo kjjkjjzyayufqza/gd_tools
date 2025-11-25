@@ -1,5 +1,5 @@
 use crate::ui::{
-    app_state::AppState, center_panel, floating_window, left_panel, right_panel, top_panel,
+    app_state::AppState, center_panel, floating_window, left_panel, right_panel, settings_modal, top_panel,
 };
 use std::time::Duration;
 
@@ -232,7 +232,10 @@ impl eframe::App for TemplateApp {
         // 5. Floating Window
         floating_window::show(ctx, &mut self.state);
 
-        // 6. Show notifications
+        // 6. Settings Modal
+        settings_modal::show(ctx, &mut self.state);
+
+        // 7. Show notifications
         self.state.toasts.show(ctx);
     }
 }
