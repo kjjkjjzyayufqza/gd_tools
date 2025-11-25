@@ -47,11 +47,6 @@ pub struct AppState {
     #[serde(skip)]
     pub extract_status_receiver: Option<crossbeam_channel::Receiver<crate::psarc::ExtractionStatus>>,
 
-    // Test Progress Bar State
-    #[serde(skip)]
-    pub show_test_progress: bool,
-    #[serde(skip)]
-    pub test_progress: f32,
 
     // Tree view expanded state
     #[serde(skip)]
@@ -87,8 +82,6 @@ impl Default for AppState {
             is_extracting: false,
             extract_progress: 0.0,
             extract_status_receiver: None,
-            show_test_progress: false,
-            test_progress: 0.0,
             expanded_folders: std::collections::HashSet::new(),
             search_query: String::new(),
             file_watcher: None,

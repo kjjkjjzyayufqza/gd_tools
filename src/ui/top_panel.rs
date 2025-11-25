@@ -167,16 +167,14 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
             });
         });
 
-        // Show progress bar below menu bar if packing, extracting, or testing
-        if state.is_packing || state.is_extracting || state.show_test_progress {
+        // Show progress bar below menu bar if packing or extracting
+        if state.is_packing || state.is_extracting {
             ui.separator();
             ui.horizontal(|ui| {
                 if state.is_packing {
                     ui.add(egui::ProgressBar::new(state.pack_progress).show_percentage());
                 } else if state.is_extracting {
                     ui.add(egui::ProgressBar::new(state.extract_progress).show_percentage());
-                } else if state.show_test_progress {
-                    ui.add(egui::ProgressBar::new(state.test_progress).show_percentage());
                 }
             });
         }
@@ -378,15 +376,6 @@ fn render_right_toolbar(ui: &mut Ui, state: &mut AppState) {
     }
 
     ui.separator();
-    if ui.button("Test Progress").clicked() {
-        state.show_test_progress = !state.show_test_progress;
-        state.test_progress = 0.0;
-        if state.show_test_progress {
-            state.status_message = "Test progress started.".to_owned();
-        } else {
-            state.status_message = "Test progress stopped.".to_owned();
-        }
-    }
     if ui.button("Refresh").clicked() {
         state.status_message = "Refreshing file list...".to_owned();
         // Re-scan if folder is open

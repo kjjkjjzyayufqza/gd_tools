@@ -204,16 +204,6 @@ impl eframe::App for TemplateApp {
 
     /// Called each time the UI needs repainting, which may be many times per second.
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Update test progress bar
-        if self.state.show_test_progress {
-            self.state.test_progress += 0.01; // Increase by 1% each frame
-            if self.state.test_progress >= 1.0 {
-                self.state.test_progress = 0.0;
-                self.state.status_message = "Test progress completed.".to_owned();
-            } else {
-                self.state.status_message = format!("Test progress: {:.0}%", self.state.test_progress * 100.0);
-            }
-        }
 
         // 1. Top Navigation Bar
         top_panel::show(ctx, &mut self.state);
