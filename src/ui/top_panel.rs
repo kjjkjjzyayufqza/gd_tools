@@ -2,8 +2,41 @@ use super::app_state::AppState;
 use egui::{TopBottomPanel, Ui};
 use rfd::FileDialog;
 use walkdir::WalkDir;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::collections::HashSet;
 use notify::{Watcher, RecursiveMode, Config};
+
+/// Extracts the arc folder name from a file path.
+/// Arc folders are named like "arc_X_ep_Y_Z" (e.g., "arc_1_ep_8_11").
+/// Returns the first path component that matches the arc folder pattern.
+fn get_arc_folder_from_path(path: &PathBuf) -> Option<String> {
+    for component in path.components() {
+        if let std::path::Component::Normal(os_str) = component {
+            if let Some(name) = os_str.to_str() {
+                // Check if it matches arc_*_ep_*_* pattern
+                if name.starts_with("arc_") && name.contains("_ep_") {
+                    return Some(name.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Collects all unique arc folders that contain modified files.
+fn get_modified_arc_folders(modified_files: &HashSet<PathBuf>) -> Vec<String> {
+    let mut arc_folders: HashSet<String> = HashSet::new();
+    
+    for file_path in modified_files {
+        if let Some(arc_folder) = get_arc_folder_from_path(file_path) {
+            arc_folders.insert(arc_folder);
+        }
+    }
+    
+    let mut result: Vec<String> = arc_folders.into_iter().collect();
+    result.sort(); // Sort for consistent display order
+    result
+}
 
 /// Scans a directory and updates the loaded files list
 fn scan_directory(state: &mut AppState, path: &Path) {
@@ -455,54 +488,65 @@ fn render_right_toolbar(ui: &mut Ui, state: &mut AppState) {
 
     // Pack PSARC button - placed before Status label (right side in RTL layout)
     if ui.button("Pack PSARC").clicked() {
-        if let Some(root) = &state.current_root_dir {
-            // Check for incremental packing
-            let packing_mode = if state.packing_mode == crate::ui::app_state::PackingMode::Incremental {
-                if state.modified_files.is_empty() {
-                    state.toasts.warning("No modified files detected for incremental packing.");
-                    state.status_message = "Incremental packing skipped: no changes.".to_string();
-                    return;
-                }
-                crate::psarc::PackingMode::Incremental
-            } else {
-                crate::psarc::PackingMode::Full
-            };
-
-            if let Some(output) = FileDialog::new()
-                .add_filter("PSARC Archive", &["psarc"])
-                .save_file()
-            {
-                // Start packing
-                let (tx, rx) = crossbeam_channel::unbounded();
-                state.pack_status_receiver = Some(rx);
-                state.is_packing = true;
-
-                let root_clone = root.clone();
-                let compression = state.compression_level.to_flate2();
-                let modified_files = state.modified_files.clone();
-                let existing_psarc = if packing_mode == crate::psarc::PackingMode::Incremental {
-                    Some(output.clone())
-                } else {
-                    None
-                };
-
-                // Call the PSARC module
-                let _ = crate::psarc::pack_directory(
-                    &root_clone,
-                    &output,
-                    compression,
-                    packing_mode,
-                    modified_files,
-                    existing_psarc,
-                    move |status| {
-                        let _ = tx.send(status);
-                    },
-                );
-            } else {
-                state.status_message = "No output file selected!".to_string();
-            }
-        } else {
+        if state.current_root_dir.is_none() {
+            state.toasts.error("No folder opened!");
             state.status_message = "No folder opened!".to_string();
+            return;
+        }
+
+        // Handle Incremental mode with confirmation popover
+        if state.packing_mode == crate::ui::app_state::PackingMode::Incremental {
+            if state.modified_files.is_empty() {
+                state.toasts.warning("No modified files detected for incremental packing.");
+                state.status_message = "Incremental packing skipped: no changes.".to_string();
+                return;
+            }
+
+            // Get list of arc folders with modified files
+            let arc_folders = get_modified_arc_folders(&state.modified_files);
+            
+            if arc_folders.is_empty() {
+                state.toasts.warning("No arc folders found in modified files. Modified files must be inside arc_*_ep_*_* folders.");
+                state.status_message = "No arc folders found in modified files.".to_string();
+                return;
+            }
+
+            // Show confirmation popover
+            state.pending_pack_folders = arc_folders;
+            state.show_pack_confirm = true;
+            state.status_message = "Confirm packing...".to_string();
+        } else {
+            // Full mode - use legacy file dialog approach
+            if let Some(root) = &state.current_root_dir {
+                if let Some(output) = FileDialog::new()
+                    .add_filter("PSARC Archive", &["psarc"])
+                    .save_file()
+                {
+                    // Start packing
+                    let (tx, rx) = crossbeam_channel::unbounded();
+                    state.pack_status_receiver = Some(rx);
+                    state.is_packing = true;
+
+                    let root_clone = root.clone();
+                    let compression = state.compression_level.to_flate2();
+                    let modified_files = state.modified_files.clone();
+
+                    // Call the PSARC module
+                    let _ = crate::psarc::pack_directory(
+                        &root_clone,
+                        &output,
+                        compression,
+                        crate::psarc::PackingMode::Full,
+                        modified_files,
+                        None,
+                        move |status| {
+                            let _ = tx.send(status);
+                        },
+                    );
+                } else {
+                    state.status_message = "No output file selected!".to_string();
+                }
+            }
         }
     }
 

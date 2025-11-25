@@ -53,8 +53,16 @@ pub struct AppState {
     // Settings
     pub compression_level: CompressionLevel,
     pub packing_mode: PackingMode,
+    /// Game folder path for PSARC output
+    pub game_folder: Option<PathBuf>,
     #[serde(skip)]
     pub show_settings: bool,
+    /// Whether the pack confirmation modal is visible
+    #[serde(skip)]
+    pub show_pack_confirm: bool,
+    /// List of arc folders pending to be packed (e.g., ["arc_1_ep_8_11", "arc_2_ep_12_30"])
+    #[serde(skip)]
+    pub pending_pack_folders: Vec<String>,
     #[serde(skip)]
     pub show_init_game_dialog: bool,
     #[serde(skip)]
@@ -138,7 +146,10 @@ impl Default for AppState {
             layout_version: 0,
             compression_level: CompressionLevel::Best,
             packing_mode: PackingMode::Full,
+            game_folder: None,
             show_settings: false,
+            show_pack_confirm: false,
+            pending_pack_folders: Vec::new(),
             show_init_game_dialog: false,
             init_game_psarc_files: [None, None, None, None, None],
             init_game_output_dir: None,

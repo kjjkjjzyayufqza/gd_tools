@@ -6,3 +6,4 @@ pub mod right_panel;
 pub mod top_panel;
 pub mod settings_modal;
 pub mod init_game_modal;
+pub mod pack_confirm_modal;
