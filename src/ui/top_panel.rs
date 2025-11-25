@@ -97,8 +97,16 @@ pub fn process_file_events(ctx: &egui::Context, state: &mut AppState) {
     }
 }
 
+/// Completion status for operations
+#[derive(Debug)]
+pub enum CompletionStatus {
+    PackingCompleted,
+    ExtractionCompleted,
+}
+
 /// Renders the top navigation bar.
-pub fn show(ctx: &egui::Context, state: &mut AppState) {
+/// Returns Some(CompletionStatus) if an operation completed, None otherwise.
+pub fn show(ctx: &egui::Context, state: &mut AppState) -> Option<CompletionStatus> {
     // Process file system events first
     process_file_events(ctx, state);
     // Process packing status updates
@@ -159,6 +167,14 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
         state.extract_status_receiver = None;
     }
 
+    let completion_status = if done_packing {
+        Some(CompletionStatus::PackingCompleted)
+    } else if done_extracting {
+        Some(CompletionStatus::ExtractionCompleted)
+    } else {
+        None
+    };
+
     TopBottomPanel::top("top_nav").show(ctx, |ui| {
         egui::MenuBar::new().ui(ui, |ui| {
             render_left_menu(ui, state);
@@ -179,6 +195,8 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
             });
         }
     });
+
+    completion_status
 }
 
 fn render_left_menu(ui: &mut Ui, state: &mut AppState) {

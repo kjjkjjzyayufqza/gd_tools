@@ -1,6 +1,7 @@
 use crate::ui::{
     app_state::AppState, center_panel, floating_window, left_panel, right_panel, top_panel,
 };
+use std::time::Duration;
 
 /// We derive Deserialize/Serialize so we can persist app state on shutdown.
 #[derive(serde::Deserialize, serde::Serialize)]
@@ -206,7 +207,18 @@ impl eframe::App for TemplateApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
 
         // 1. Top Navigation Bar
-        top_panel::show(ctx, &mut self.state);
+        if let Some(completion) = top_panel::show(ctx, &mut self.state) {
+            match completion {
+                top_panel::CompletionStatus::PackingCompleted => {
+                    self.state.toasts.success("Packing completed successfully!")
+                        .duration(Duration::from_secs(5));
+                }
+                top_panel::CompletionStatus::ExtractionCompleted => {
+                    self.state.toasts.success("Extraction completed successfully!")
+                        .duration(Duration::from_secs(5));
+                }
+            }
+        }
 
         // 2. Left File Browser
         left_panel::show(ctx, &mut self.state);
@@ -219,5 +231,8 @@ impl eframe::App for TemplateApp {
 
         // 5. Floating Window
         floating_window::show(ctx, &mut self.state);
+
+        // 6. Show notifications
+        self.state.toasts.show(ctx);
     }
 }

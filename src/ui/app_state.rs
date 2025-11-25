@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use egui_notify::{Toasts, Anchor};
+use egui;
 // use std::sync::{Arc, Mutex}; // Unused for now
 
 /// Application state that can be persisted and shared across components.
@@ -61,6 +63,10 @@ pub struct AppState {
     pub file_watcher: Option<Box<dyn notify::Watcher>>,
     #[serde(skip)]
     pub file_events_receiver: Option<crossbeam_channel::Receiver<notify::Result<notify::Event>>>,
+
+    // Notification system
+    #[serde(skip)]
+    pub toasts: Toasts,
 }
 
 impl Default for AppState {
@@ -86,6 +92,9 @@ impl Default for AppState {
             search_query: String::new(),
             file_watcher: None,
             file_events_receiver: None,
+            toasts: Toasts::default()
+                .with_anchor(Anchor::TopRight)
+                .with_margin(egui::vec2(10.0, 40.0)),
         }
     }
 }
