@@ -8,6 +8,15 @@ const MODIFIED_INDICATOR: &str = " ●";
 const MODIFIED_COLOR: Color32 = Color32::from_rgb(255, 193, 7); // Amber/Orange yellow
 const ROW_HEIGHT: f32 = 20.0; // Approximate height per row for virtual scrolling
 
+// Required arc folders that must exist
+const REQUIRED_ARC_FOLDERS: &[&str] = &[
+    "arc_0_ep_0_0",
+    "arc_0_ep_1_7",
+    "arc_1_ep_8_11",
+    "arc_2_ep_12_30",
+    "arc_3_ep_31_31",
+];
+
 pub fn show(ctx: &egui::Context, state: &mut AppState) {
     if !state.left_panel_visible {
         return;
@@ -47,18 +56,16 @@ fn render_filters(ui: &mut egui::Ui, state: &mut AppState) {
 
 /// Optimized file list rendering with caching and virtual scrolling
 fn render_file_list_optimized(ui: &mut egui::Ui, state: &mut AppState) {
-    if state.loaded_files.is_empty() {
-        ui.label("No files loaded. Open a folder to start.");
-        return;
-    }
-
-    // Show root folder name
+    // Show root folder name if folder is opened
     if let Some(root) = &state.current_root_dir {
         ui.label(format!(
             "📂 {} ({} files)",
             root.file_name().unwrap_or_default().to_string_lossy(),
             state.loaded_files.len()
         ));
+    } else {
+        ui.label("No files loaded. Open a folder to start.");
+        return;
     }
 
     // Ensure tree is built and cached
@@ -120,29 +127,46 @@ fn render_file_list_optimized(ui: &mut egui::Ui, state: &mut AppState) {
                         });
                     } else {
                         // Render folder
-                        let is_expanded = expanded_folders.contains(&item.full_path);
-                        let has_modified = folders_with_modified.contains(&item.full_path);
-
-                        let arrow = if is_expanded { "▼" } else { "▶" };
-                        let folder_icon = "📂";
-                        
-                        let display_text = if has_modified {
-                            format!("{}{} {} {}{}", indent, arrow, folder_icon, item.name, MODIFIED_INDICATOR)
+                        if item.is_virtual {
+                            // Render virtual folder (doesn't exist) - grayed out with strikethrough
+                            let folder_icon = "📂";
+                            let display_text = format!("{} {} ~{}~", indent, folder_icon, item.name);
+                            
+                            // Render with gray color and strikethrough effect
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    RichText::new(display_text)
+                                        .color(Color32::from_rgb(128, 128, 128)) // Gray color
+                                        .strikethrough()
+                                );
+                            });
+                            // Virtual items are not clickable - do nothing on click
                         } else {
-                            format!("{}{} {} {}", indent, arrow, folder_icon, item.name)
-                        };
+                            // Render normal folder
+                            let is_expanded = expanded_folders.contains(&item.full_path);
+                            let has_modified = folders_with_modified.contains(&item.full_path);
 
-                        // Add child count for collapsed folders with many items
-                        let display_with_count = if !is_expanded && item.child_count > 0 {
-                            format!("{} ({})", display_text, item.child_count)
-                        } else {
-                            display_text
-                        };
+                            let arrow = if is_expanded { "▼" } else { "▶" };
+                            let folder_icon = "📂";
+                            
+                            let display_text = if has_modified {
+                                format!("{}{} {} {}{}", indent, arrow, folder_icon, item.name, MODIFIED_INDICATOR)
+                            } else {
+                                format!("{}{} {} {}", indent, arrow, folder_icon, item.name)
+                            };
 
-                        let response = ui.selectable_label(false, display_with_count);
-                        
-                        if response.clicked() {
-                            folders_to_toggle.push(item.full_path.clone());
+                            // Add child count for collapsed folders with many items
+                            let display_with_count = if !is_expanded && item.child_count > 0 {
+                                format!("{} ({})", display_text, item.child_count)
+                            } else {
+                                display_text
+                            };
+
+                            let response = ui.selectable_label(false, display_with_count);
+                            
+                            if response.clicked() {
+                                folders_to_toggle.push(item.full_path.clone());
+                            }
                         }
                     }
                 }
@@ -320,20 +344,70 @@ fn compute_folders_with_modified_recursive(
 /// Build a flat list of currently visible items based on expanded folders
 fn build_visible_flat_list(state: &AppState) -> Vec<FlatTreeItem> {
     let mut items = Vec::new();
+    let search_query = state.search_query.trim();
+    
+    // Build a map of existing root-level folders by name
+    let mut existing_folders: HashMap<String, &CachedTreeNode> = HashMap::new();
+    let mut other_folders: Vec<&CachedTreeNode> = Vec::new();
     
     if let Some(tree) = &state.cached_tree {
-        let search_query = state.search_query.trim();
-        
-        // For root node, add all children
         for child in &tree.children {
+            if !child.is_file {
+                if REQUIRED_ARC_FOLDERS.contains(&child.name.as_str()) {
+                    existing_folders.insert(child.name.clone(), child);
+                } else {
+                    other_folders.push(child);
+                }
+            } else {
+                // Also handle root-level files
+                other_folders.push(child);
+            }
+        }
+    }
+    
+    // First, add required arc folders in fixed order
+    for &required_folder in REQUIRED_ARC_FOLDERS {
+        if let Some(folder_node) = existing_folders.get(required_folder) {
+            // Folder exists - add it normally
             build_flat_list_recursive(
-                child,
+                folder_node,
                 0,
                 &state.expanded_folders,
                 search_query,
                 &mut items,
             );
+        } else {
+            // Folder doesn't exist - add virtual item
+            // Only add if search query is empty or matches the folder name
+            let matches_search = if !search_query.is_empty() {
+                required_folder.to_lowercase().contains(&search_query.to_lowercase())
+            } else {
+                true
+            };
+            
+            if matches_search {
+                items.push(FlatTreeItem {
+                    name: required_folder.to_string(),
+                    full_path: required_folder.to_string(),
+                    is_file: false,
+                    depth: 0,
+                    child_count: 0,
+                    has_children: false,
+                    is_virtual: true,
+                });
+            }
         }
+    }
+    
+    // Then add other folders and files
+    for other_node in &other_folders {
+        build_flat_list_recursive(
+            other_node,
+            0,
+            &state.expanded_folders,
+            search_query,
+            &mut items,
+        );
     }
 
     items
@@ -362,6 +436,7 @@ fn build_flat_list_recursive(
         depth,
         child_count: node.file_count,
         has_children: !node.children.is_empty(),
+        is_virtual: false,
     });
 
     // For folders, only recurse if expanded (or if searching and has matches)

@@ -28,6 +28,8 @@ pub struct FlatTreeItem {
     pub child_count: usize,
     /// Whether this item has children (for folder expand arrow)
     pub has_children: bool,
+    /// Whether this is a virtual item (folder doesn't exist)
+    pub is_virtual: bool,
 }
 // use std::sync::{Arc, Mutex}; // Unused for now
 
